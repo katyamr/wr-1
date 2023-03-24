@@ -3,10 +3,10 @@
 import cadquery as cq
 import math
 
-#Rout = 90 / 2
-#Rin = 88 / 2
-Rout = 93 / 2
-Rin = 90.6 / 2
+Rout = 91 / 2
+Rin = 88 / 2
+#Rout = 93 / 2
+#Rin = 90.6 / 2
 h = 130
 x0 = (h ** 2 - Rout ** 2) / (2 * Rout)
 th = 1.6
@@ -57,8 +57,8 @@ cone = cone.faces("<Z") \
 cone = cone.faces("<Z").fillet(2)
 
 cam = cq.Workplane("XY") \
-      .rect(15, 30) \
-      .extrude(15)
+      .rect(16, 40) \
+      .extrude(16)
 
 cam_shell = cam.translate((0, 0, 0)).faces(">Z").shell(th)
 
@@ -70,12 +70,18 @@ cam_shell = cam_shell.translate((0, Rout - 10, 5)) \
       .intersect(inner_cone)
 
 bat = cq.Workplane("XY") \
-      .rect(8, 20) \
+      .rect(8, 21) \
       .extrude(40) \
       .translate((0, 0, 10))
 
 bat_shell = bat.translate((0, 0, 0)).faces(">Z").shell(th) \
       .cut(bat.translate((-4, 12, 0)))
+
+bat = bat.faces(">Z").workplane(centerOption="CenterOfBoundBox") \
+      .rect(8, 21) \
+      .workplane(offset=20 / 2) \
+      .rect(0.1, 0.1) \
+      .loft(combine=True)
 
 inner_cone = inner_cone.cut(inner_edge) \
       .cut(inner_edge.rotate((0, 0, 0), (0, 0, 1), 60)) \
