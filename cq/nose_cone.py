@@ -72,14 +72,14 @@ cam_shell = cam_shell.translate((0, Rout - 10, 5)) \
 bat = cq.Workplane("XY") \
       .rect(8, 21) \
       .extrude(40) \
-      .translate((0, 0, 10))
+      .translate((0, 0, 20))
 
 bat_shell = bat.translate((0, 0, 0)).faces(">Z").shell(th) \
       .cut(bat.translate((-4, 12, 0)))
 
 bat = bat.faces(">Z").workplane(centerOption="CenterOfBoundBox") \
       .rect(8, 21) \
-      .workplane(offset=20 / 2) \
+      .workplane(offset=30 / 2) \
       .rect(0.1, 0.1) \
       .loft(combine=True)
 
