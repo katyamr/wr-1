@@ -1,23 +1,32 @@
-#include <VB_BMP280.h>
+#include "VoltBroSensors/VB_BMP280.h"
+#include "VoltBroSensors/VB_BMP280.cpp"
+#include "VoltBroSensors/arduino_mpu9250_VB_routines.cpp"
+#include "VoltBroSensors/VB_MPU9250.h"
+// include "VoltBroSensors/VB_MPU9250.cpp"
+
 #include <Servo.h>
 #include <SD.h>
+#include <Wire.h>
 
 #include "buffer.hpp"
 #include "oversample_ring.h"
 #include "tone_sweep.h"
 
+#include "DS3231.h"
+
 Servo save_servo;
 const int save_servo_pin = 9;
-const int pushButton = A3;
-const int sd_cs_pin = 4;
+const int button_pin = A3;
+const int sd_cs_pin = 4;    /* SD card chip select */
+const int battery_pin = A2;
 
 VB_BMP280 barometer; 
 bool barometer_connection;
 const int green_led_pin = 5;
 const int yellow_led_pin = 6;
 const char TeamID[] = "RM";
-double bat = 0;
-double acc = 0;
+float bat = 0;
+float acc = 0;
 
 int start_point = 0;
 int apogee_point = 0;
@@ -32,11 +41,14 @@ float h_sum = 0;
 uint32_t last_t = 0;
 double last_vel = 0;
 uint32_t last_wt = 0;
+uint32_t measures = 0;
 
 uint32_t last_metrics_t = 0;
 uint32_t last_log_t = 0;
 uint32_t last_debug_t = 0;
-float last_debug_h = 0;
+
+uint32_t last_sweep_t = 0;
+float last_sweep_h = 0;
 
 uint32_t delay_ms = 20;
 
@@ -53,15 +65,15 @@ tone_sweep_t tone_sweep;
 void setup_sensors() {
   barometer.start_altitude = 0;
   barometer_connection = barometer.begin(
-      BMP280_DEFAULT_ADDRESS,
+      BMP280_ALTERNATIVE_ADDRESS,
       (BMP280_TSB_0_5 << 5) | (BMP280_FILTER_OFF << 2)|(BMP280_SPI_OFF),
-      (BMP280_OVERSAMPLING_T1 << 5)|(BMP280_OVERSAMPLING_P2 << 2)|(BMP280_MODE_NORMAL)
+      (BMP280_OVERSAMPLING_T1 << 5)|(BMP280_OVERSAMPLING_P4 << 2)|(BMP280_MODE_NORMAL)
   );
 }
 
 void read_battery() {
-  int Va = analogRead(A2);
-  bat = 3.0 * 5.0 * Va / 1023.0 + 0.29;
+  int Va = analogRead(battery_pin);
+  bat = 3.0 * 5.0 * Va / 1023.0 + 0.29 /* diode dropout */;
 }
 
 void setup() {
@@ -69,22 +81,36 @@ void setup() {
   send_buffer.reserve(100);
 
   Serial.begin(115200);
-  pinMode(pushButton, INPUT);
+  pinMode(button_pin, INPUT);
+  pinMode(battery_pin, INPUT);
   pinMode(green_led_pin, OUTPUT);
 
-  tone_sweep.setup();
+  pinMode(A0, OUTPUT);
+  digitalWrite(A0, HIGH);
 
+  tone_sweep.setup();
   setup_sensors();
 
   bool sd_ready = SD.begin(sd_cs_pin);
   if (sd_ready) {
     String fname;
-    int n = 50;
-
+    int n = 20;
+    String data_name = "data-";
+/*
+    date_time now;
+    now.read();
+    data_name += now.year();
+    data_name += now.month();
+    data_name += now.day();
+    data_name += "-";
+    data_name += now.hour();
+    data_name += now.minute();
+    data_name += now.second();
+    data_name += "-";
+*/
     do {
-      n += 10;
-      fname = "data";
-      fname += n;
+      n += 1;
+      fname = data_name + n;
       fname += ".txt";
     } while (SD.exists(fname));
 
@@ -101,7 +127,7 @@ void setup() {
   if (barometer_connection) {
 
     memset(&alt_ring, 0, sizeof(alt_ring));
-    for (uint8_t i = 0; i < alt_ring.capacity; ++i) {
+    for (uint8_t i = 0; i < alt_ring.capacity * 2; ++i) {
       delay(20);
       barometer.read();
       alt_ring.update(barometer.alti);
@@ -132,7 +158,10 @@ void send_metrics(uint32_t t, double h, double acc, double vel, int buttonState)
     Serial1.write(send_buffer.c_str(), send_buffer.length());
 }
 
+#define HAVE_LOG_METRICS 1
+
 void log_metrics(uint32_t t, double h, double acc, double vel) {
+#if HAVE_LOG_METRICS
   //uint32_t t1 = millis();
 
   //log_buffer = "";
@@ -200,10 +229,11 @@ void log_metrics(uint32_t t, double h, double acc, double vel) {
 
   //uint32_t t2 = millis();
   //last_wt = t2 - t1;
+#endif
 }
 
 void loop() {
-  int buttonState = digitalRead(pushButton);
+  int buttonState = digitalRead(button_pin);
 /*
   if (buttonState != 0) { 
     digitalWrite(green_led_pin, HIGH);
@@ -219,6 +249,8 @@ void loop() {
 
   if (barometer_connection) {
     barometer.read();
+
+    ++measures;
 
     uint32_t t = millis();
     float h = barometer.alti;
@@ -247,30 +279,44 @@ void loop() {
       if (Serial.dtr()) {
           debug_buffer.ensure_capacity(80);
           debug_buffer.reset();
+          //date_time now;
+          //now.read();
           debug_buffer
               << vel << '\t'
               << h_avg << '\t'
+              << measures << '\t'
               << barometer.temp << '\t'
-              << barometer.pres << '\n';
+              //<< barometer.temp_i << '\t'
+              << barometer.pres << '\t'
+              //<< barometer.pres_i << '\t'
+              //<< now.year() << '/' << now.month() << '/' << now.day() << ' '
+              //<< now.hour() << ':' << now.minute() << ':' << now.second()
+              << '\n';
+
+          measures = 0;
 
           Serial.write(debug_buffer.c_str(), debug_buffer.length());
       }
 
       //log_file.flush();
 
-      if (fabs(last_debug_h - h_avg) > 0.5) {
-          if (h_avg > last_debug_h) {
+      last_debug_t = t;
+    }
+
+    if (last_sweep_t + 300 < t) {
+      if (fabs(last_sweep_h - h_avg) > 0.5) {
+          if (h_avg > last_sweep_h) {
               tone_sweep.start(t, 880, 880 * 4, 300);
           } else {
               tone_sweep.start(t, 880 * 4, 880, 300);
           }
       }
 
-      last_debug_h = h_avg;
-      last_debug_t = t;
+      last_sweep_h = h_avg;
+      last_sweep_t = t;
     }
 
-    if (0 && (t - last_metrics_t) > 100) {
+    if (1 && (t - last_metrics_t) > 100) {
       last_metrics_t = t;
       send_metrics(t, h, h_avg, vel, buttonState);
     }

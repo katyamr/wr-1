@@ -13,6 +13,10 @@ struct buffer {
         return *this;
     }
 
+    buffer& append(const char* s) {
+        return append(s, strlen(s));
+    }
+
     buffer& append(uint32_t n) {
         char b[1 + 3 * sizeof(n)];
         ultoa(n, b, 10);
@@ -22,34 +26,54 @@ struct buffer {
     buffer& append(int32_t n) {
         char b[1 + 3 * sizeof(n)];
         ltoa(n, b, 10);
-        return append(b, strlen(b));
+        return append(b);
     }
 
     buffer& append(char c) {
-        return append(&c, 1);
+        if (len + 1 < capacity) {
+            buf[len] = c;
+            ++len;
+            buf[len] = 0;
+        }
+
+        return *this;
     }
 
-    buffer& append(int n) {
+    buffer& append(int16_t n) {
         char b[1 + 3 * sizeof(n)];
         ltoa(n, b, 10);
-        return append(b, strlen(b));
+        return append(b);
     }
 
+    buffer& append(uint16_t n) {
+        char b[1 + 3 * sizeof(n)];
+        ultoa(n, b, 10);
+        return append(b);
+    }
 
     buffer& append(double d) {
         char b[20];
         const char* s = dtostrf(d, 4, 2, b);
-        return append(s, strlen(s));
+        return append(s);
     }
 
-    buffer& operator<<(const char* s) { return append(s, strlen(s)); }
-    buffer& operator+=(const char* s) { return append(s, strlen(s)); }
+    buffer& operator<<(char c) { return append(c); }
+    buffer& operator<<(const char* s) { return append(s); }
+    buffer& operator<<(int32_t n) { return append(n); }
+    buffer& operator<<(uint32_t n) { return append(n); }
+    buffer& operator<<(int16_t n) { return append(n); }
+    buffer& operator<<(uint16_t n) { return append(n); }
+    buffer& operator<<(float n) { return append(n); }
+    buffer& operator<<(double n) { return append(n); }
 
-    template<typename T>
-    buffer& operator<<(T v) { return append(v); }
-
-    template<typename T>
-    buffer& operator+=(T v) { return append(v); }
+    buffer& operator+=(char c) { return append(c); }
+    buffer& operator+=(const char* s) { return append(s); }
+    buffer& operator+=(int32_t n) { return append(n); }
+    buffer& operator+=(uint32_t n) { return append(n); }
+    buffer& operator+=(int16_t n) { return append(n); }
+    buffer& operator+=(uint16_t n) { return append(n); }
+    buffer& operator+=(float n) { return append(n); }
+    buffer& operator+=(double n) { return append(n); }
 
     void remove(uint16_t pos, uint16_t size) {
         uint16_t l = (pos + size >= len) ? 0 : len - (pos + size);
