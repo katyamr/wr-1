@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Wire.h>
+#include "buffer.h"
 
 #define CLOCK_ADDRESS 0x68
 
@@ -9,6 +10,13 @@ struct bcd_value {
     void str(char *s) const {
         s[0] = '0' + (v >> 4);
         s[1] = '0' + (v & 0x0F);
+    }
+
+    buffer& append_to(buffer& b) const {
+        str(b.buf + b.len);
+        b.len += 2;
+        b.buf[b.len] = 0;
+        return b;
     }
 
     bcd_value& operator=(uint8_t d) { v = d; return *this; }
@@ -40,18 +48,10 @@ struct date_time {
     bcd_value y, m, d, hh, mm, ss;
 };
 
-template<typename T>
-T& operator += (T& s, bcd_value b) {
-    char str[3];
-    b.str(str);
-    str[2] = 0;
-    return (s += str);
+buffer& operator += (buffer& s, bcd_value b) {
+    return b.append_to(s);
 }
 
-template<typename T>
-T& operator << (T& s, bcd_value b) {
-    char str[3];
-    b.str(str);
-    str[2] = 0;
-    return (s << str);
+buffer& operator << (buffer& s, bcd_value b) {
+    return b.append_to(s);
 }

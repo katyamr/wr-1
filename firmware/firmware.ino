@@ -8,17 +8,24 @@
 #include <SD.h>
 #include <Wire.h>
 
-#include "buffer.hpp"
+#include "buffer.h"
 #include "oversample_ring.h"
 #include "tone_sweep.h"
 
 #include "DS3231.h"
+#include "uart.h"
+
+#include "artl/button.h"
+#include "artl/timer.h"
 
 Servo save_servo;
 const int save_servo_pin = 9;
 const int button_pin = A3;
 const int sd_cs_pin = 4;    /* SD card chip select */
 const int battery_pin = A2;
+
+artl::button<> button_state;
+artl::timer<> servo_timer;
 
 VB_BMP280 barometer; 
 bool barometer_connection;
@@ -32,18 +39,17 @@ int start_point = 0;
 int apogee_point = 0;
 uint32_t activate_point = 0;
 int landing_point = 0;
-const double min_vel = -2.0; // m / s
+const float min_vel = -2.0; // m / s
 
 oversample_ring<10, float> alt_ring;
 
 float h_sum = 0;
 
 uint32_t last_t = 0;
-double last_vel = 0;
+float last_vel = 0;
 uint32_t last_wt = 0;
 uint32_t measures = 0;
 
-uint32_t last_metrics_t = 0;
 uint32_t last_log_t = 0;
 uint32_t last_debug_t = 0;
 
@@ -53,12 +59,22 @@ float last_sweep_h = 0;
 uint32_t delay_ms = 20;
 
 File log_file;
-//String log_buffer;
 buffer log_buffer;
 buffer send_buffer;
 buffer debug_buffer;
 uint32_t log_ovf = 0;
 uint32_t log_failed = 0;
+
+using transmitter = uart_t<9600>;
+template<> uint8_t transmitter::write_size = 0;
+template<> const uint8_t *transmitter::write_data = 0;
+
+artl::timer<> transmitter_timer;
+
+ISR(USART1_UDRE_vect)
+{
+    transmitter::on_dre_int();
+}
 
 tone_sweep_t tone_sweep;
 
@@ -77,7 +93,9 @@ void read_battery() {
 }
 
 void setup() {
-  Serial1.begin(9600);
+  transmitter::setup();
+
+  //Serial1.begin(9600);
   send_buffer.reserve(100);
 
   Serial.begin(115200);
@@ -93,9 +111,9 @@ void setup() {
 
   bool sd_ready = SD.begin(sd_cs_pin);
   if (sd_ready) {
-    String fname;
+    buffer fname;
+    fname.reserve(12);
     int n = 20;
-    String data_name = "data-";
 /*
     date_time now;
     now.read();
@@ -110,11 +128,11 @@ void setup() {
 */
     do {
       n += 1;
-      fname = data_name + n;
-      fname += ".txt";
-    } while (SD.exists(fname));
+      fname.reset()
+          << "data-" << n << ".txt";
+    } while (SD.exists(fname.buf));
 
-    log_file = SD.open(fname, FILE_WRITE);
+    log_file = SD.open(fname.buf, FILE_WRITE);
     log_buffer.reserve(256); //512 + 256);
 
     pinMode(yellow_led_pin, OUTPUT);
@@ -141,10 +159,8 @@ void setup() {
   digitalWrite(green_led_pin, HIGH);
 }
 
-void send_metrics(uint32_t t, double h, double acc, double vel, int buttonState) {
-    send_buffer.reset();
-
-    send_buffer
+void send_metrics(uint32_t t, float h, float acc, float vel, int buttonState) {
+    send_buffer.reset()
         << TeamID << ';'
         << t << ';'
         << h << ';'
@@ -155,50 +171,32 @@ void send_metrics(uint32_t t, double h, double acc, double vel, int buttonState)
         << activate_point << ';'
         << landing_point << '\n';
 
-    Serial1.write(send_buffer.c_str(), send_buffer.length());
+    transmitter::write(send_buffer.c_str(), send_buffer.length());
 }
 
 #define HAVE_LOG_METRICS 1
 
-void log_metrics(uint32_t t, double h, double acc, double vel) {
+void log_metrics(uint32_t t, float h, float acc, float vel) {
 #if HAVE_LOG_METRICS
-  //uint32_t t1 = millis();
-
-  //log_buffer = "";
-
   uint16_t log_pos = log_buffer.length();
 
-  log_buffer += TeamID;
-  log_buffer += ";";
-  log_buffer += t;
-  log_buffer += ";";
-  log_buffer += h;
-  log_buffer += ";";
-  log_buffer += bat;
-  log_buffer += ";";
-  log_buffer += acc;
-  log_buffer += ";";
-  log_buffer += start_point;
-  log_buffer += ";";
-  log_buffer += apogee_point;
-  log_buffer += ";";
-  log_buffer += activate_point;
-  log_buffer += ";";
-  log_buffer += landing_point;
-
-  log_buffer += ";";
-  log_buffer += last_wt;
-  log_buffer += ";";
-  log_buffer += barometer.pres;
-  log_buffer += ";";
-  log_buffer += barometer.temp;
-  log_buffer += ";";
-  log_buffer += vel;
-  log_buffer += ";";
-  log_buffer += log_ovf;
-  log_buffer += ";";
-  log_buffer += log_failed;
-  log_buffer += "\n";
+  log_buffer
+      << TeamID << ';'
+      << t << ';'
+      << h << ';'
+      << bat << ';'
+      << acc << ';'
+      << start_point << ';'
+      << apogee_point << ';'
+      << activate_point << ';'
+      << landing_point << ';'
+      << last_wt << ';'
+      << barometer.pres << ';'
+      << barometer.temp << ';'
+      << vel << ';'
+      << log_ovf << ';'
+      << log_failed << ";"
+      << '\n';
 
   if (log_buffer.full()) {
     ++log_ovf;
@@ -232,8 +230,32 @@ void log_metrics(uint32_t t, double h, double acc, double vel) {
 #endif
 }
 
+void activate_servo(uint32_t t) {
+    digitalWrite(yellow_led_pin, HIGH);
+    save_servo.attach(save_servo_pin);
+    save_servo.write(30);
+
+    servo_timer.schedule(t + 500);
+}
+
+void update_servo(uint32_t t) {
+    if (servo_timer.update(t)) {
+        digitalWrite(yellow_led_pin, LOW);
+        save_servo.detach();
+    }
+}
+
 void loop() {
+  uint32_t t = millis();
   int buttonState = digitalRead(button_pin);
+  if (button_state.update(buttonState, t)) {
+      if (button_state.down()) {
+          activate_servo(t);
+      }
+  }
+
+  update_servo(t);
+
 /*
   if (buttonState != 0) { 
     digitalWrite(green_led_pin, HIGH);
@@ -252,7 +274,6 @@ void loop() {
 
     ++measures;
 
-    uint32_t t = millis();
     float h = barometer.alti;
 
     float h_sum_0 = alt_ring.sum;
@@ -278,10 +299,7 @@ void loop() {
 
       if (Serial.dtr()) {
           debug_buffer.ensure_capacity(80);
-          debug_buffer.reset();
-          //date_time now;
-          //now.read();
-          debug_buffer
+          debug_buffer.reset()
               << vel << '\t'
               << h_avg << '\t'
               << measures << '\t'
@@ -316,9 +334,9 @@ void loop() {
       last_sweep_t = t;
     }
 
-    if (1 && (t - last_metrics_t) > 100) {
-      last_metrics_t = t;
-      send_metrics(t, h, h_avg, vel, buttonState);
+    if (transmitter::write_ready() && transmitter_timer.update(t)) {
+        transmitter_timer.schedule(t + 100);
+        send_metrics(t, h, h_avg, vel, buttonState);
     }
 
     if (log_file) { // && (t - last_log_t) > 100) {

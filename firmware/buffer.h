@@ -14,47 +14,48 @@ struct buffer {
     }
 
     buffer& append(const char* s) {
-        return append(s, strlen(s));
+        uint8_t size = strlen(s);
+        memcpy(buf + len, s, size + 1);
+        len += size;
+        return *this;
     }
 
     buffer& append(uint32_t n) {
-        char b[1 + 3 * sizeof(n)];
-        ultoa(n, b, 10);
-        return append(b, strlen(b));
+        const char *s = ultoa(n, buf + len, 10);
+        len += strlen(s);
+        return *this;
     }
 
     buffer& append(int32_t n) {
-        char b[1 + 3 * sizeof(n)];
-        ltoa(n, b, 10);
-        return append(b);
+        const char *s = ltoa(n, buf + len, 10);
+        len += strlen(s);
+        return *this;
     }
 
     buffer& append(char c) {
-        if (len + 1 < capacity) {
-            buf[len] = c;
-            ++len;
-            buf[len] = 0;
-        }
+        buf[len] = c;
+        ++len;
+        buf[len] = 0;
 
         return *this;
     }
 
     buffer& append(int16_t n) {
-        char b[1 + 3 * sizeof(n)];
-        ltoa(n, b, 10);
-        return append(b);
+        return append((int32_t) n);
     }
 
     buffer& append(uint16_t n) {
-        char b[1 + 3 * sizeof(n)];
-        ultoa(n, b, 10);
-        return append(b);
+        return append((uint32_t) n);
     }
 
-    buffer& append(double d) {
-        char b[20];
-        const char* s = dtostrf(d, 4, 2, b);
-        return append(s);
+    buffer& append(float d) {
+        const char* s = dtostrf(d, 4, 2, buf + len);
+        len += strlen(s);
+        return *this;
+    }
+
+    buffer& assign(const char* s) {
+        return reset().append(s);
     }
 
     buffer& operator<<(char c) { return append(c); }
@@ -64,7 +65,6 @@ struct buffer {
     buffer& operator<<(int16_t n) { return append(n); }
     buffer& operator<<(uint16_t n) { return append(n); }
     buffer& operator<<(float n) { return append(n); }
-    buffer& operator<<(double n) { return append(n); }
 
     buffer& operator+=(char c) { return append(c); }
     buffer& operator+=(const char* s) { return append(s); }
@@ -73,7 +73,8 @@ struct buffer {
     buffer& operator+=(int16_t n) { return append(n); }
     buffer& operator+=(uint16_t n) { return append(n); }
     buffer& operator+=(float n) { return append(n); }
-    buffer& operator+=(double n) { return append(n); }
+
+    buffer& operator=(const char* s) { return assign(s); }
 
     void remove(uint16_t pos, uint16_t size) {
         uint16_t l = (pos + size >= len) ? 0 : len - (pos + size);
@@ -93,9 +94,10 @@ struct buffer {
         reserve(n);
     }
 
-    void reset() {
+    buffer& reset() {
         len = 0;
         buf[0] = 0;
+        return *this;
     }
 
     const uint8_t* c_str() const { return buf; }
@@ -103,7 +105,7 @@ struct buffer {
     bool empty() const { return len == 0; }
     bool full() const { return len + 1 >= capacity; }
 
-    uint8_t* buf = NULL;
-    uint16_t len = 0;
-    uint16_t capacity = 0;
+    uint8_t *buf = NULL;
+    uint8_t len = 0;
+    uint8_t capacity = 0;
 };
