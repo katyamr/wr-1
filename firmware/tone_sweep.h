@@ -44,6 +44,8 @@ struct tone_sweep_t {
         noTone(A1);
     }
 
+    bool active() const { return freq != 0; }
+
     unsigned int freq;
     int freq_step;
     unsigned long next_t;

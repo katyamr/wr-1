@@ -1,6 +1,6 @@
 
-#define HAVE_LOG_METRICS 1
-#define HAVE_DEBUG_PRINT 0
+#define HAVE_LOG_METRICS 0
+#define HAVE_DEBUG_PRINT 1
 #define HAVE_TRANSMITTER 1
 
 #include "VoltBroSensors/VB_BMP280.h"
@@ -69,9 +69,12 @@ artl::timer<> debug_print_timer;
 const uint32_t debug_print_delay = 1000;
 #endif
 
-float last_sweep_alti = 0;
-artl::timer<> sweep_timer;
-ring<10, float> alti_ring;
+struct alti_history {
+    uint16_t t;
+    float alti;
+};
+
+ring<10, alti_history> alti_ring;
 
 const uint32_t loop_delay_ms = 500;
 
@@ -123,7 +126,8 @@ tone_sweep_t tone_sweep;
 
 void alti_ring_push(uint32_t t, float v) {
     if (alti_ring.full()) alti_ring.pop_front();
-    alti_ring.push_back(v);
+    alti_history h{(uint16_t) t, v};
+    alti_ring.push_back(h);
 }
 
 void setup_sensors() {
@@ -203,7 +207,6 @@ void setup() {
             barometer.read();
             alti_ring_push(millis(), alti_filter(barometer.alti));
         }
-        last_sweep_alti = alti_filter;
 
         tone_sweep.beep(880, 50);
         barometer_timer.schedule(millis());
@@ -220,7 +223,6 @@ void setup() {
 #if HAVE_DEBUG_PRINT
     debug_print_timer.schedule(t);
 #endif
-    sweep_timer.schedule(t);
 }
 
 #if HAVE_TRANSMITTER
@@ -331,14 +333,23 @@ void loop() {
 
         ++measures;
 
-        float last_alti = alti_filter;
         float f = alti_filter(barometer.alti);
+
+        if (!tone_sweep.active()) {
+            alti_history front = alti_ring.front();
+
+            float d = f - front.alti;
+            if (fabs(d) > 0.5) {
+                if (d > 0.0) {
+                    tone_sweep.start(t, 880, 880 * 4, 300);
+                } else {
+                    tone_sweep.start(t, 880 * 4, 880, 300);
+                }
+            }
+        }
+
         alti_ring_push(t, f);
 
-        float vel = 1000.0 * (f - last_alti) / (t - last_t);
-
-        last_t = t;
-        last_vel = vel;
         up = true;
     }
 
@@ -382,21 +393,6 @@ void loop() {
         }
     }
 #endif
-
-    if (sweep_timer.update(t)) {
-        sweep_timer.schedule(t + 300);
-/*
-        float d = (float) alti_filter - last_sweep_alti;
-        if (fabs(d) > 0.5) {
-            if (d > 0.0) {
-                tone_sweep.start(t, 880, 880 * 4, 300);
-            } else {
-                tone_sweep.start(t, 880 * 4, 880, 300);
-            }
-        }
-*/
-        last_sweep_alti = alti_filter;
-    }
 
 #if HAVE_TRANSMITTER
     if (transmitter::write_ready()) {
