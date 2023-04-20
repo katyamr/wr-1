@@ -13,7 +13,7 @@ struct bcd_value {
     }
 
     buffer& append_to(buffer& b) const {
-        str(b.buf + b.len);
+        str((char *) b.buf + b.len);
         b.len += 2;
         b.buf[b.len] = 0;
         return b;

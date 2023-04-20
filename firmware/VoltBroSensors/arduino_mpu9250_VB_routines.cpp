@@ -74,20 +74,20 @@ int arduino_i2c_read_byte(unsigned char slave_addr, unsigned char reg_addr)
 	Wire.beginTransmission(slave_addr);
 	Wire.write(reg_addr);
 	Wire.endTransmission(false);
-	Wire.requestFrom(slave_addr, 1);
+	Wire.requestFrom(slave_addr, (uint8_t) 1);
 	return Wire.read();
 }
 
 //dummy code that should be written
 
-void logString(char * string)
+void logString(char * /* string */)
 {
 }
 
-void eMPL_send_quat(long *quat)
+void eMPL_send_quat(long * /* quat */)
 {
 }
 
-void eMPL_send_data(unsigned char type, long *data)
+void eMPL_send_data(unsigned char /* type */, long * /* data */)
 {
 }
