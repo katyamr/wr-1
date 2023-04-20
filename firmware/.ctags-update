@@ -1,0 +1,6 @@
+ctags -R . \
+    ~/Documents/Arduino/libraries \
+    ~/Library/Arduino15/libraries \
+    ~/Library/Arduino15/packages/arduino/hardware/avr/1.8.6/libraries \
+    ~/Library/Arduino15/packages/arduino/hardware/avr/1.8.6/cores/arduino \
+    ~/Library/Arduino15/packages/arduino/hardware/avr/1.8.6/variants/leonardo
