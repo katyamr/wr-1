@@ -1,6 +1,23 @@
+#!/bin/bash
+
+set -eu
+
+if [ -d "$HOME/Library/Arduino15" ]; then
+    ARDUINO="$HOME/Library/Arduino15"
+fi
+
+if [ -d "$HOME/.arduino15" ]; then
+    ARDUINO="$HOME/.arduino15"
+fi
+
+HWAVR_DIR="$ARDUINO/packages/arduino/hardware/avr/1.8.6"
+AVRGCC_DIR="$ARDUINO/packages/arduino/tools/avr-gcc/7.3.0-atmel3.6.1-arduino7"
+
+# ? ~/Documents/Arduino/libraries
+
 ctags -R . \
-    ~/Documents/Arduino/libraries \
-    ~/Library/Arduino15/libraries \
-    ~/Library/Arduino15/packages/arduino/hardware/avr/1.8.6/libraries \
-    ~/Library/Arduino15/packages/arduino/hardware/avr/1.8.6/cores/arduino \
-    ~/Library/Arduino15/packages/arduino/hardware/avr/1.8.6/variants/leonardo
+    "$ARDUINO/libraries" \
+    "$HWAVR_DIR/cores/arduino" \
+    "$HWAVR_DIR/libraries" \
+    "$HWAVR_DIR/variants/leonardo" \
+    "$AVRGCC_DIR/avr/include"
