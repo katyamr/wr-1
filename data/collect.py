@@ -3,20 +3,35 @@ import serial
 import sys
 import time
 
-rate = 115200
+if len(sys.argv) < 2:
+    from serial.tools.list_ports import comports
+    for p in comports():
+        print(f'{p[0]}: {p[1]}')
+    exit()
+
+#rate = 115200
+rate = 9600
 
 def connect():
     with serial.Serial(sys.argv[1], rate, timeout=1) as ser:
-        print(f'[{time.monotonic()}: {ser.name}]')
+        fname = time.strftime('data-%Y%m%d-%H%M%S.txt')
+        print(f'[{time.monotonic()}: {fname} {ser.name}]')
+        last_time = 0
 
-        while True:
-            s = ser.readline()
-            if s:
-                s = s.decode()
-                print(s, end='')
+        with open(fname, "wb") as f:
+            while True:
+                s = ser.readline()
+                if s:
+                    t = time.monotonic()
+                    if t - last_time > 1:
+                        f.write(time.strftime('\n%Y%m%d-%H%M%S\n').encode())
+                    last_time = t
+                    f.write(s)
+                    print(s.decode(), end='')
 
 while True:
     try:
         connect()
     except serial.serialutil.SerialException as e:
-        time.sleep(0.1)
+        pass
+    time.sleep(0.5)
