@@ -57,18 +57,23 @@ void VB_BMP280::initialize(uint8_t config) {
 
     if ((dev_control & BMP280_MODE_NORMAL) == BMP280_MODE_NORMAL) {
         arduino_i2c_write_byte(dev_addr, BMP280_REGISTER_CONTROL, dev_control);
+        wait_measuring();
     }
 
     // инициируем чтение для получения текущего давления
     read();
 
-    // расчетное давление на уровне моря в мм.рт.ст.
-    SLP = pres / pow(1 - (start_altitude / 44330), 5.255);
+    reset_SLP();
 }
 
 // Проверка соединения с девайсом
 bool VB_BMP280::test() {
     return 0x58 == arduino_i2c_read_byte(dev_addr, BMP280_REGISTER_CHIPID);
+}
+
+void VB_BMP280::reset_SLP() {
+    // расчетное давление на уровне моря в мм.рт.ст.
+    SLP = pres / pow(1 - (start_altitude / 44330), 5.255);
 }
 
 using BMP280_S32_t = int32_t;
@@ -197,10 +202,9 @@ bool VB_BMP280::read() {
     if ((dev_control & BMP280_MODE_NORMAL) == BMP280_MODE_FORCED) {
         arduino_i2c_write_byte(dev_addr, BMP280_REGISTER_CONTROL, dev_control);
         arduino_i2c_write_byte(dev_addr, BMP280_REGISTER_CONTROL, dev_control);
+        wait_measuring();
     }
-    wait_measuring();
 
-    // Запускаем измерение всего (по отдельности нельзя)
     arduino_i2c_read(dev_addr, BMP280_REGISTER_PRESSUREDATA, 6, buffer);
 
     adc_P = ((int32_t) buffer[0] << 12)

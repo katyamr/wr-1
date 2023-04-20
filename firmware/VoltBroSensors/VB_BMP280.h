@@ -83,6 +83,7 @@ class VB_BMP280
         uint8_t control = BMP280_MEAS);
 
     bool read();
+    void reset_SLP();
 
     // Output Data
     float temp; // Значение температуры в °C
