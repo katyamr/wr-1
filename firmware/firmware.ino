@@ -1,6 +1,6 @@
 
-#define HAVE_LOG_METRICS 0
-#define HAVE_DEBUG_PRINT 1
+#define HAVE_LOG_METRICS 1
+#define HAVE_DEBUG_PRINT 0
 #define HAVE_TRANSMITTER 1
 
 #include "VoltBroSensors/VB_BMP280.h"
@@ -22,16 +22,32 @@
 #include "ring.h"
 
 #include "artl/button.h"
+#include "artl/digital_in.h"
+#include "artl/digital_out.h"
 #include "artl/timer.h"
 #include "artl/tc.h"
 #include "artl/yield.h"
 #include "crit_sec.h"
 
+enum {
+    SERVO_UNKNOWN,
+    SERVO_CLOSED,
+    SERVO_OPEN,
+} servo_state = SERVO_UNKNOWN;
+
 Servo save_servo;
+const int servo_close_pos = 67;
+const int servo_open_pos = 30;
+const uint32_t servo_timeout = 500;
 const int save_servo_pin = 9;
-const int button_pin = A3;
+const float servo_open_threshold = 0.4;
+
+using test_button = artl::digital_in<artl::port::F, 4>; // pin A3
 const int sd_cs_pin = 4;    /* SD card chip select */
 const int battery_pin = A2;
+
+// AD0/SDO to change BMP280 & MPU9250 i2c IDs
+using gy91_id = artl::digital_out<artl::port::F, 7>; // pin A0
 
 artl::button<> button_state;
 artl::timer<> servo_timer;
@@ -41,24 +57,26 @@ bool barometer_connection;
 artl::timer<> barometer_timer;
 const uint32_t barometer_measure_delay = 20; // ms
 
-const int green_led_pin = 5;
-const int yellow_led_pin = 6;
+using green_led = artl::digital_out<artl::port::C, 6>; // pin D5
+using yellow_led = artl::digital_out<artl::port::D, 7>; // pin D6
+
 const char TeamID[] = "RM";
 
 int Va;
 float bat = 0;
 float acc = 0;
 
-int start_point = 0;
-int apogee_point = 0;
+uint32_t start_point = 0;
+uint32_t apogee_point = 0;
 uint32_t activate_point = 0;
 int landing_point = 0;
 const float min_vel = -2.0; // m / s
 
 kalman_filter_t<float> alti_filter(0.0, 1.0, 1.0, 0.5);
+float apogee = 0;
+float ascent_start = 0;
+float descent_start = 0;
 
-uint32_t last_t = 0;
-float last_vel = 0;
 uint32_t last_wt = 0;
 uint32_t measures = 0;
 
@@ -66,7 +84,7 @@ uint32_t last_log_t = 0;
 
 #if HAVE_DEBUG_PRINT
 artl::timer<> debug_print_timer;
-const uint32_t debug_print_delay = 1000;
+const uint32_t debug_print_delay = 300;
 #endif
 
 struct alti_history {
@@ -74,15 +92,15 @@ struct alti_history {
     float alti;
 };
 
-ring<10, alti_history> alti_ring;
+ring<5, alti_history> alti_ring;
 
 const uint32_t loop_delay_ms = 500;
 
 File log_file;
 buffer log_buffer;
 buffer debug_buffer;
-uint32_t log_failed = 0;
-uint32_t log_ovf = 0;
+
+uint32_t transmitter_bytes = 0;
 
 #if HAVE_TRANSMITTER
 using transmitter = uart_t<9600>;
@@ -113,16 +131,22 @@ ISR(ADC_vect) {
 }
 
 using input_tc = artl::tc<4>;
+
+#if HAVE_DEBUG_PRINT
 uint32_t tc4_count = 0;
+#endif
 
 ISR(TIMER4_COMPA_vect)
 {
+#if HAVE_DEBUG_PRINT
     ++tc4_count;
+#endif
     ADCSRA |= (1 << ADSC); // Start Conversion
     input_tc().cnt() = 0;
 }
 
 tone_sweep_t tone_sweep;
+const float tone_sweep_threshold = 0.4;
 
 void alti_ring_push(uint32_t t, float v) {
     if (alti_ring.full()) alti_ring.pop_front();
@@ -130,7 +154,7 @@ void alti_ring_push(uint32_t t, float v) {
     alti_ring.push_back(h);
 }
 
-void setup_sensors() {
+void barometer_setup() {
     barometer.start_altitude = 0;
     barometer_connection = barometer.begin(
         BMP280_ALTERNATIVE_ADDRESS,
@@ -139,33 +163,42 @@ void setup_sensors() {
     );
 }
 
+void servo_close(uint32_t t);
+
 void setup() {
-    // setup battery ADC pin
-    pinMode(battery_pin, INPUT);
-    ADCSRB = 0; // Free running
-    ADMUX = (1 << 6) // AVCC with external capacitor on AREF pin
-            | (analogPinToChannel(battery_pin - 18) & 0x07);
-    ADCSRA |= (1 << ADIE) // Interrupt Enable
-            | (1 << ADSC); // Start Conversion
+    {
+        crit_sec cs;
 
-    transmitter_setup();
+        // setup battery ADC pin
+        // pinMode(battery_pin, INPUT);
+        ADCSRB = 0; // Free running
+        ADMUX = (1 << 6) // AVCC with external capacitor on AREF pin
+                | (analogPinToChannel(battery_pin - 18) & 0x07);
+        ADCSRA |= (1 << ADIE) // Interrupt Enable
+                | (1 << ADSC); // Start Conversion
 
-    input_tc().setup(0, 0, 4, input_tc::cs::presc_2048);
-    input_tc().ocra() = 150;
-    input_tc().cnt() = 0;
-    input_tc().oca().enable();
+        transmitter_setup();
+
+        input_tc().setup(0, 0, 4, input_tc::cs::presc_2048);
+        input_tc().ocra() = 150;
+        input_tc().cnt() = 0;
+        input_tc().oca().enable();
+    }
 
     Serial.begin(115200);
-    pinMode(button_pin, INPUT);
-    pinMode(green_led_pin, OUTPUT);
-    int buttonState = digitalRead(button_pin);
+
+    test_button::setup();
+    green_led::setup();
+    yellow_led::setup();
+
+    int buttonState = test_button::read();
 
     // Pull UP AD0/SDO to change BMP280 & MPU9250 i2c IDs
-    pinMode(A0, OUTPUT);
-    digitalWrite(A0, HIGH);
+    gy91_id::setup();
+    gy91_id::high();
 
     tone_sweep.setup();
-    setup_sensors();
+    barometer_setup();
 
     bool sd_ready = SD.begin(sd_cs_pin);
     if (sd_ready) {
@@ -186,10 +219,8 @@ void setup() {
         log_buffer << now.year() << now.month() << now.day()
             << '-' << now.hour() << now.minute() << now.second() << '\n';
 
-        log_file.write(log_buffer.c_str(), log_buffer.length());
+        log_file.write(log_buffer.data(), log_buffer.length());
         log_file.flush();
-
-        pinMode(yellow_led_pin, OUTPUT);
 
         tone_sweep.beep(1046, 100);
         tone_sweep.beep(1318, 200);
@@ -198,7 +229,7 @@ void setup() {
 
     if (barometer_connection) {
         for (uint8_t i = 0; i < 5; ++i) {
-            delay(20);
+            delay(barometer_measure_delay);
             barometer.read();
         }
         barometer.reset_SLP();
@@ -208,16 +239,23 @@ void setup() {
             alti_ring_push(millis(), alti_filter(barometer.alti));
         }
 
-        tone_sweep.beep(880, 50);
+        tone_sweep.beep(880, 100);
         barometer_timer.schedule(millis());
+    }
+
+    if (bat < 6.5) {
+        for (uint8_t i = 0; i < 3; ++i) {
+            delay(100);
+            tone_sweep.beep(440, 200);
+        }
     }
 
     uint32_t t = millis();
 
-    digitalWrite(green_led_pin, HIGH);
+    green_led::high();
 
     if (buttonState) {
-        activate_servo(t, 65);
+        servo_close(t);
     }
 
 #if HAVE_DEBUG_PRINT
@@ -239,6 +277,8 @@ void send_metrics(uint32_t t) {
         << landing_point << '\n';
 
     transmitter::write(transmitter_buffer.data(), transmitter_buffer.length());
+
+    transmitter_bytes += transmitter_buffer.length();
 }
 #endif
 
@@ -258,55 +298,44 @@ void log_metrics(uint32_t t) {
         << last_wt << ';'
         << barometer.pres << ';'
         << barometer.temp << ';'
-        << last_vel << ';'
-  //      << log_ovf << ';'
-  //      << log_failed << ";"
+        << transmitter_bytes << ";"
+        << servo_state << ';'
         << '\n';
-  /*
-    if (log_buffer.full()) {
-      ++log_ovf;
-      log_buffer.remove(log_pos, log_buffer.length() - log_pos);
-    }
-  */
-    unsigned int chunkSize = log_buffer.length(); //log_file.availableForWrite();
-    if (chunkSize == 0) {
-        ++log_failed;
-    }
 
-    if (chunkSize && log_buffer.length() >= chunkSize) {
-        digitalWrite(green_led_pin, LOW);
-        digitalWrite(yellow_led_pin, HIGH);
+    green_led::low();
+    yellow_led::high();
 
-        uint32_t t1 = millis();
-        log_file.write(log_buffer.c_str(), chunkSize);
-        log_file.flush();
-        last_wt = millis() - t1;
+    uint32_t t1 = millis();
+    log_file.write(log_buffer.data(), log_buffer.length());
+    log_file.flush();
+    last_wt = millis() - t1;
 
-        digitalWrite(yellow_led_pin, LOW);
-        digitalWrite(green_led_pin, HIGH);
-        //log_buffer.remove(0, chunkSize);
-        log_buffer.reset();
-        //last_wt += chunkSize;
-    }
-
-    //log_file.flush();
-
-    //uint32_t t2 = millis();
-    //last_wt = t2 - t1;
+    yellow_led::low();
+    green_led::high();
 #endif
 }
 
-void activate_servo(uint32_t t, int value) {
-    digitalWrite(yellow_led_pin, HIGH);
+void servo_activate(uint32_t t, int pos) {
+    yellow_led::high();
     save_servo.attach(save_servo_pin);
-    save_servo.write(value);
+    save_servo.write(pos);
 
-    servo_timer.schedule(t + 500);
+    servo_timer.schedule(t + servo_timeout);
 }
 
-void update_servo(uint32_t t) {
+void servo_open(uint32_t t) {
+    servo_activate(t, servo_open_pos);
+    servo_state = SERVO_OPEN;
+}
+
+void servo_close(uint32_t t) {
+    servo_activate(t, servo_close_pos);
+    servo_state = SERVO_CLOSED;
+}
+
+void servo_update(uint32_t t) {
     if (servo_timer.update(t)) {
-        digitalWrite(yellow_led_pin, LOW);
+        yellow_led::low();
         save_servo.detach();
     }
 }
@@ -314,14 +343,16 @@ void update_servo(uint32_t t) {
 void loop() {
     uint32_t t = millis();
 
-    int b = digitalRead(button_pin);
-    if (button_state.update(b, t)
-        && button_state.down()
-        && !servo_timer.active()) {
-        activate_servo(t, 30);
+    bool b = test_button::read();
+    if (button_state.update(b, t) && button_state.down()) {
+        if (!servo_timer.active()) {
+            servo_open(t);
+        } else {
+            servo_close(t);
+        }
     }
 
-    update_servo(t);
+    servo_update(t);
     tone_sweep.update(t);
 
     bool up = false;
@@ -334,17 +365,19 @@ void loop() {
         ++measures;
 
         float f = alti_filter(barometer.alti);
+        alti_history front = alti_ring.front();
+        float d = f - front.alti;
+
+        if (d < -servo_open_threshold && servo_state != SERVO_OPEN) {
+            servo_open(t);
+        }
 
         if (!tone_sweep.active()) {
-            alti_history front = alti_ring.front();
-
-            float d = f - front.alti;
-            if (fabs(d) > 0.5) {
-                if (d > 0.0) {
-                    tone_sweep.start(t, 880, 880 * 4, 300);
-                } else {
-                    tone_sweep.start(t, 880 * 4, 880, 300);
-                }
+            if (d > tone_sweep_threshold) {
+                tone_sweep.start(t, 880, 880 * 4, 300);
+            }
+            if (d < -tone_sweep_threshold) {
+                tone_sweep.start(t, 880 * 4, 880, 300);
             }
         }
 
@@ -353,15 +386,6 @@ void loop() {
         up = true;
     }
 
-/*
-    if (activate_point == 0 && vel < min_vel && last_vel < min_vel) {
-        activate_point = t;
-        digitalWrite(green_led_pin, HIGH);
-        save_servo.attach(save_servo_pin);
-        save_servo.write(30); 
-    }
-*/
-
 #if HAVE_DEBUG_PRINT
     if (debug_print_timer.update(t)) {
         debug_print_timer.schedule(t + debug_print_delay);
@@ -369,7 +393,7 @@ void loop() {
         if (Serial.dtr()) {
             debug_buffer.ensure_capacity(80);
             debug_buffer.reset()
-                << last_vel << '\t'
+                << barometer.alti << '\t'
                 << (float) alti_filter << '\t'
                 << bat << '\t'
                 << tc4_count << '\t'
