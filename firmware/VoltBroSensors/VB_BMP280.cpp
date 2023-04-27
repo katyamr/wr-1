@@ -9,7 +9,7 @@ uint16_t VB_BMP280::read16_LE(uint8_t reg) {
 }
 
 bool VB_BMP280::begin(uint8_t address, uint8_t config, uint8_t control) {
-    Wire.begin();
+    //Wire.begin();
     dev_addr = address;
     dev_control = control;
 
@@ -22,36 +22,11 @@ bool VB_BMP280::begin(uint8_t address, uint8_t config, uint8_t control) {
 }
 
 void VB_BMP280::initialize(uint8_t config) {
-    // Читаем калибровочные коэффициенты (константы для корректировки показаний температуры и давления) из EEPROM
     uint16_t *v = &dig_T1;
     for (uint8_t reg = BMP280_REGISTER_DIG_T1; reg <= BMP280_REGISTER_DIG_P9; reg += 2, v += 1) {
         *v = read16_LE(reg);
     }
     SLP = 0;
-    /*Serial.print("t1 = ");
-    Serial.println(dig_T1);
-    Serial.print("t2 = ");
-    Serial.println(dig_T2);
-    Serial.print("t3 = ");
-    Serial.println(dig_T3);
-    Serial.print("p1 = ");
-    Serial.println(dig_P1);
-    Serial.print("p2 = ");
-    Serial.println(dig_P2);
-    Serial.print("p3 = ");
-    Serial.println(dig_P3);
-    Serial.print("p4 = ");
-    Serial.println(dig_P4);
-    Serial.print("p5 = ");
-    Serial.println(dig_P5);
-    Serial.print("p6 = ");
-    Serial.println(dig_P6);
-    Serial.print("p7 = ");
-    Serial.println(dig_P7);
-    Serial.print("p8 = ");
-    Serial.println(dig_P8);
-    Serial.print("p9 = ");
-    Serial.println(dig_P9);*/
 
     arduino_i2c_write_byte(dev_addr, BMP280_REGISTER_CONFIG, config);
 
@@ -143,35 +118,35 @@ BMP280_U32_t VB_BMP280::compensate_P_int32(BMP280_S32_t adc_P) const {
     p = p - (var2 >> 12);
     p = p * 3125;
 
-    if (p < 0x80000000) {
+    if (p < 0x80000000U) {
         p = (p << 1) / ((BMP280_U32_t) var3);
     } else {
         p = (p / (BMP280_U32_t) var3) * 2;
     }
 
-    var4 = p >> 3;
+    var4 = (int32_t) (p >> 3);
     var4 = (var4 * var4) >> 13;
     var4 = (P9 * var4) >> 12;
 
-    var5 = ((p >> 2) * P8) >> 13;
+    var5 = (P8 * (int32_t) (p >> 2)) >> 13;
 
     return p + ((var4 + var5 + P7) >> 4);
 }
 
 int32_t VB_BMP280::read_temperature(int32_t adc_T)
 {
-  int32_t var1, var2;
+    int32_t var1, var2;
 
-  var1  = ((((adc_T >> 3) - ((int32_t) dig_T1 << 1))) *
-       ((int32_t) dig_T2)) >> 11;
+    var1  = ((((adc_T >> 3) - ((int32_t) dig_T1 << 1))) *
+         ((int32_t) dig_T2)) >> 11;
 
-  var2  = (((((adc_T >> 4) - ((int32_t) dig_T1)) *
-             ((adc_T >> 4) - ((int32_t) dig_T1))) >> 12) *
-            ((int32_t) dig_T3)) >> 14;
+    var2  = (((((adc_T >> 4) - ((int32_t) dig_T1)) *
+               ((adc_T >> 4) - ((int32_t) dig_T1))) >> 12) *
+              ((int32_t) dig_T3)) >> 14;
 
-  t_fine = var1 + var2;
+    t_fine = var1 + var2;
 
-  return (t_fine * 5 + 128) >> 8;
+    return (t_fine * 5 + 128) >> 8;
 }
 
 float VB_BMP280::compensate_P_float(BMP280_S32_t adc_P) const {
@@ -218,7 +193,7 @@ bool VB_BMP280::read() {
     temp = read_temperature(adc_T) / 100.0;
 
     temp_i = compensate_T_int32(adc_T);
-    //pres_i = compensate_P_int32(adc_P);
+    pres_i = compensate_P_int32(adc_P);
 
     //temp = temp_i / 100.0;
     pres = compensate_P_float(adc_P);

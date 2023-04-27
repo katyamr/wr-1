@@ -6,7 +6,7 @@
 #else
 #include <WProgram.h>
 #endif
-#include "Wire.h"
+// #include "Wire.h"
 
 #define BMP280_DEFAULT_ADDRESS 0x76//Нога SDO на GY91 притянута на 0
 #define BMP280_ALTERNATIVE_ADDRESS 0x77 //Если ногу SDO притянуть к 1, по умолчанию на GY91 она притянута на GND

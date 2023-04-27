@@ -7,7 +7,7 @@ struct tone_sweep_t {
     static const unsigned long min_delay = 2;
 
     void setup() {
-        pinMode(A1, OUTPUT);
+        // pinMode(A1, OUTPUT);
         freq = 0;
     }
 
@@ -15,7 +15,7 @@ struct tone_sweep_t {
         if (freq && (t - next_t) < half_t) {
             if ((t - stop_t) > half_t) {
                 freq += freq_step * (t - next_t + min_delay);
-                tone(A1, freq);
+                // tone(A1, freq);
                 next_t = t + min_delay;
             } else {
                 freq = 0;
@@ -28,7 +28,7 @@ struct tone_sweep_t {
         long duration) {
         freq = start_freq;
         freq_step = (stop_freq - start_freq) / duration;
-        tone(A1, freq);
+        // tone(A1, freq);
         stop_t = t + duration;
         next_t = t + min_delay;
     }
@@ -38,8 +38,8 @@ struct tone_sweep_t {
         noTone(A1);
     }
 
-    static void beep(unsigned int f, unsigned long d) {
-        tone(A1, f);
+    static void beep(unsigned int /* f */, unsigned long d) {
+        // tone(A1, f);
         delay(d);
         noTone(A1);
     }

@@ -1,23 +1,21 @@
 
 #define HAVE_LOG_METRICS 1
-#define HAVE_DEBUG_PRINT 0
+#define HAVE_DEBUG_PRINT 1
 #define HAVE_TRANSMITTER 1
 
-#include "VoltBroSensors/VB_BMP280.h"
-#include "VoltBroSensors/VB_BMP280.cpp"
-#include "VoltBroSensors/arduino_mpu9250_VB_routines.cpp"
-#include "VoltBroSensors/VB_MPU9250.h"
-// include "VoltBroSensors/VB_MPU9250.cpp"
+#include "BMP280.h"
+#include "MPU9250.h"
+#include "DS3231.h"
+
+MPU9250 accelgyro(MPU9250_ADDRESS_AD0_HIGH);
 
 #include <Servo.h>
 #include <SD.h>
-#include <Wire.h>
 
 #include "buffer.h"
 #include "kalman_filter.h"
 #include "tone_sweep.h"
 
-#include "DS3231.h"
 #include "uart.h"
 #include "ring.h"
 
@@ -28,6 +26,9 @@
 #include "artl/tc.h"
 #include "artl/yield.h"
 #include "crit_sec.h"
+
+#include "artl/twi.h"
+#include "artl/twi.cpp"
 
 enum {
     SERVO_UNKNOWN,
@@ -52,7 +53,7 @@ using gy91_id = artl::digital_out<artl::port::F, 7>; // pin A0
 artl::button<> button_state;
 artl::timer<> servo_timer;
 
-VB_BMP280 barometer; 
+BMP280 barometer;
 bool barometer_connection;
 artl::timer<> barometer_timer;
 const uint32_t barometer_measure_delay = 20; // ms
@@ -154,15 +155,6 @@ void alti_ring_push(uint32_t t, float v) {
     alti_ring.push_back(h);
 }
 
-void barometer_setup() {
-    barometer.start_altitude = 0;
-    barometer_connection = barometer.begin(
-        BMP280_ALTERNATIVE_ADDRESS,
-        (BMP280_TSB_0_5 << 5) | (BMP280_FILTER_OFF << 2) | (BMP280_SPI_OFF),
-        (BMP280_OVERSAMPLING_T1 << 5) | (BMP280_OVERSAMPLING_P2 << 2) | (BMP280_MODE_NORMAL)
-    );
-}
-
 void servo_close(uint32_t t);
 
 void setup() {
@@ -187,6 +179,8 @@ void setup() {
 
     Serial.begin(115200);
 
+    artl::twi::init();
+
     test_button::setup();
     green_led::setup();
     yellow_led::setup();
@@ -198,7 +192,20 @@ void setup() {
     gy91_id::high();
 
     tone_sweep.setup();
-    barometer_setup();
+    barometer.setup();
+
+    accelgyro.initialize();
+
+    arduino_i2c_write_byte(MPU9250_ADDRESS_AD0_HIGH, MPU9250_RA_CONFIG, 0x03);
+    arduino_i2c_write_byte(MPU9250_ADDRESS_AD0_HIGH, MPU9250_RA_GYRO_CONFIG, MPU9250_GYRO_FS_1000 << 3);
+    arduino_i2c_write_byte(MPU9250_ADDRESS_AD0_HIGH, MPU9250_RA_ACCEL_CONFIG, MPU9250_ACCEL_FS_8 << 3);
+    arduino_i2c_write_byte(MPU9250_ADDRESS_AD0_HIGH, MPU9250_RA_FF_THR, 0x06);
+
+    arduino_i2c_write_byte(MPU9250_ADDRESS_AD0_HIGH, MPU9250_RA_INT_PIN_CFG, 0x02);
+
+    arduino_i2c_write_byte(MPU9150_RA_MAG_ADDRESS, 0x0A, 0x16);
+
+    //imu.begin();
 
     bool sd_ready = SD.begin(sd_cs_pin);
     if (sd_ready) {
@@ -216,8 +223,7 @@ void setup() {
         date_time now;
         now.read();
 
-        log_buffer << now.year() << now.month() << now.day()
-            << '-' << now.hour() << now.minute() << now.second() << '\n';
+        log_buffer << now << '\n';
 
         log_file.write(log_buffer.data(), log_buffer.length());
         log_file.flush();
@@ -232,7 +238,7 @@ void setup() {
             delay(barometer_measure_delay);
             barometer.read();
         }
-        barometer.reset_SLP();
+        barometer.reset_slp(0);
         while (!alti_ring.full()) {
             delay(barometer_measure_delay);
             barometer.read();
@@ -352,6 +358,7 @@ void loop() {
         }
     }
 
+    //artl::twi::update();
     servo_update(t);
     tone_sweep.update(t);
 
@@ -391,20 +398,62 @@ void loop() {
         debug_print_timer.schedule(t + debug_print_delay);
 
         if (Serial.dtr()) {
-            debug_buffer.ensure_capacity(80);
+            date_time now;
+            now.read();
+
+            artl::twi::reg_read(MPU9250_ADDRESS_AD0_HIGH, MPU9250_RA_ACCEL_XOUT_H, 14);
+            int16_t v[7];
+            uint8_t *b = artl::twi::buffer();
+
+            for (uint8_t i = 0; i < 7; ++i) {
+                v[i] = (b[2 * i] << 8) | b[2 * i + 1];
+            }
+
+            float a[3];
+            for (uint8_t i = 0; i < 3; ++i) {
+                a[i] = (float) v[i] * (1 << 3) / (1 << 15);
+            }
+
+            for (uint8_t i = 0; i < 100; ++i) {
+                artl::twi::reg_read(MPU9150_RA_MAG_ADDRESS, 0x02, 1);
+                if (b[0] & 0x01) {
+                    break;
+                }
+            }
+
+            artl::twi::reg_read(MPU9150_RA_MAG_ADDRESS, 0x02, 7);
+            int16_t m[3];
+            for (uint8_t i = 0; i < 3; ++i) {
+                m[i] = (b[2 * i + 2] << 8) | b[2 * i + 1];
+            }
+/*
+            int16_t ax, ay, az;
+            int16_t gx, gy, gz;
+            int16_t mx, my, mz;
+            accelgyro.getMotion9(&ax, &ay, &az, &gx, &gy, &gz, &mx, &my, &mz);
+*/
+
+            debug_buffer.ensure_capacity(90);
             debug_buffer.reset()
+                << '[' << artl::twi_isr << ',' << artl::twi_wait << ']'
+                << now << '\t'
                 << barometer.alti << '\t'
                 << (float) alti_filter << '\t'
                 << bat << '\t'
                 << tc4_count << '\t'
                 << measures << '\t'
                 << barometer.temp << '\t'
+                << a[0] << ',' << a[1] << ',' << a[2] << '\t'
+                //<< v[3] << '\t'
+                //<< v[4] << ',' << v[5] << ',' << v[6] << '\t'
+                << b[0] << '\t'
+                << m[0] << ',' << m[1] << ',' << m[2] << '\t'
                 //<< barometer.temp_i << '\t'
                 << barometer.pres << '\t'
-                //<< barometer.pres_i << '\t'
+                << barometer.pres_i << '\t'
                 //<< now.year() << '/' << now.month() << '/' << now.day() << ' '
                 //<< now.hour() << ':' << now.minute() << ':' << now.second()
-                << '\n';
+                << '\n' << '\r';
 
             {
                 crit_sec cs;

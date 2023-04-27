@@ -49,10 +49,10 @@
 #define get_ms    arduino_get_clock_ms
 #define log_i(...)     do {} while (0)
 #define log_e(...)     do {} while (0)
-static inline int reg_int_cb(struct int_param_s *int_param)
+static inline int reg_int_cb(struct int_param_s * /*int_param*/)
 {
-    
-} 
+    return 0;
+}
 //--VVM added by V.Medinskiy 14/03/18 for CanSatJunior Russia
 
 #elif defined MOTION_DRIVER_TARGET_MSP430
@@ -574,9 +574,8 @@ const struct gyro_reg_s reg = {
     .i2c_mst        = 0x24,
     .bank_sel       = 0x6D,
     .mem_start_addr = 0x6E,
-    .prgm_start_h   = 0x70
+    .prgm_start_h   = 0x70,
 #ifdef AK89xx_SECONDARY
-    ,.raw_compass   = 0x49,
     .s0_addr        = 0x25,
     .s0_reg         = 0x26,
     .s0_ctrl        = 0x27,
@@ -586,7 +585,9 @@ const struct gyro_reg_s reg = {
     .s4_ctrl        = 0x34,
     .s0_do          = 0x63,
     .s1_do          = 0x64,
-    .i2c_delay_ctrl = 0x67
+    .i2c_delay_ctrl = 0x67,
+    .raw_compass    = 0x49,
+    .yg_offs_tc     = 0x00,
 #endif
 };
 const struct hw_s hw = {
@@ -623,6 +624,7 @@ const struct test_s test = {
 static struct gyro_state_s st = {
     .reg = &reg,
     .hw = &hw,
+    .chip_cfg = { },
     .test = &test
 };
 #endif

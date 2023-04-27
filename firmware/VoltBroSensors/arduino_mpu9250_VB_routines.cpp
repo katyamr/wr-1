@@ -10,7 +10,7 @@ Also Based on log_stm32.c from Invensense motion_driver_6.12
 
 #include "arduino_mpu9250_VB_routines.h"
 #include <Arduino.h>
-#include <Wire.h>
+#include "../artl/twi.h"
 
 #define BUF_SIZE        (256)
 #define PACKET_LENGTH   (23)
@@ -34,48 +34,36 @@ int arduino_delay_ms(unsigned long num_ms)
 int arduino_i2c_write(unsigned char slave_addr, unsigned char reg_addr,
                        unsigned char length, unsigned char * data)
 {
-	Wire.beginTransmission(slave_addr);
-	Wire.write(reg_addr);
-	for (unsigned char i = 0; i < length; i++)
-	{
-		Wire.write(data[i]);
-	}
-	Wire.endTransmission(true);
+    artl::twi::buffer()[0] = reg_addr;
+    memcpy(artl::twi::buffer() + 1, data, length);
 
-	return 0;
+    return artl::twi::write(slave_addr, length + 1, true);
 }
 
-void arduino_i2c_write_byte(unsigned char slave_addr, unsigned char reg_addr,
+int arduino_i2c_write_byte(unsigned char slave_addr, unsigned char reg_addr,
                        unsigned char data)
 {
-	Wire.beginTransmission(slave_addr);
-	Wire.write(reg_addr);
-	Wire.write(data);
-	Wire.endTransmission(true);
+    artl::twi::buffer()[0] = reg_addr;
+    artl::twi::buffer()[1] = data;
+
+    return artl::twi::write(slave_addr, 2, true);
 }
 
 int arduino_i2c_read(unsigned char slave_addr, unsigned char reg_addr,
                        unsigned char length, unsigned char * data)
 {
-	Wire.beginTransmission(slave_addr);
-	Wire.write(reg_addr);
-	Wire.endTransmission(false);
-	Wire.requestFrom(slave_addr, length);
-	for (unsigned char i = 0; i < length; i++)
-	{
-		data[i] = Wire.read();
-	}
+    uint8_t res = artl::twi::reg_read(slave_addr, reg_addr, length);
 
-	return 0;
+    memcpy(data, artl::twi::buffer(), length);
+
+    return res;
 }
 
 int arduino_i2c_read_byte(unsigned char slave_addr, unsigned char reg_addr)
 {
-	Wire.beginTransmission(slave_addr);
-	Wire.write(reg_addr);
-	Wire.endTransmission(false);
-	Wire.requestFrom(slave_addr, (uint8_t) 1);
-	return Wire.read();
+    artl::twi::reg_read(slave_addr, reg_addr, 1);
+
+    return artl::twi::buffer()[0];
 }
 
 //dummy code that should be written

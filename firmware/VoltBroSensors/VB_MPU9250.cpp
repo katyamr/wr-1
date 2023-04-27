@@ -9,9 +9,9 @@ It is based on their Emedded MotionDriver 6.12 library.
 */
 
 
-#include <VB_MPU9250.h>
+#include "VB_MPU9250.h"
 
-#include <Wire.h>
+//#include <Wire.h>
 #include <Arduino.h>
 
 
@@ -31,7 +31,7 @@ mpu_error_t VB_MPU9250::begin(void)
 	mpu_error_t result;
     struct int_param_s int_param;
 
-	Wire.begin();
+	//Wire.begin();
 
 	result = mpu_init(&int_param);
 
