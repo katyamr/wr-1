@@ -3,10 +3,13 @@
 #include <stdint.h>
 
 struct BMP280 {
-    uint8_t setup();
-    uint8_t read();
+    bool setup();
+    bool read();
 
     void reset_slp(float altitude);
+
+    static int16_t *dig();
+    static bool ready();
 
     float temp;
     float pres;

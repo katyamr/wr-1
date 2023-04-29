@@ -31,4 +31,6 @@ struct twi {
     static uint8_t reg_write(uint8_t sla, uint8_t reg, uint8_t val);
 
     static void update();
+
+    static uint8_t last_error;
 };

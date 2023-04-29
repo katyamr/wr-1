@@ -1,6 +1,6 @@
 
 #include "twi.h"
-#include "artl/bits/twi.h"
+#include "bits/twi.h"
 #include "artl/digital_out.h"
 #include "artl/yield.h"
 
@@ -14,13 +14,15 @@ namespace {
 
 #define TWI_FREQ 100000L
 
-using twi_sda = digital_out<port::D, 1>;
-using twi_scl = digital_out<port::D, 0>;
+using twi_sda = artl::digital_out<artl::port::D, 1>;
+using twi_scl = artl::digital_out<artl::port::D, 0>;
 
 volatile uint8_t twi_state;
 volatile uint8_t twi_slarw;
 volatile uint8_t twi_sendStop;   // should the transaction end with a stop
 volatile uint8_t twi_inRepStart; // in the middle of a repeated start
+
+#define HAVE_TWI_TIMEOUT 0
 
 // twi_timeout_us > 0 prevents the code from getting stuck in various while loops here
 // if twi_timeout_us == 0 then timeout checking is disabled (the previous Wire lib behavior)
@@ -28,9 +30,12 @@ volatile uint8_t twi_inRepStart; // in the middle of a repeated start
 // and twi_do_reset_on_timeout could become true
 // to conform to the SMBus standard
 // http://smbus.org/specs/SMBus_3_1_20180319.pdf
+
+#if HAVE_TWI_TIMEOUT
 volatile uint32_t twi_timeout_us = 0ul;
 volatile bool twi_timed_out_flag = false;  // a timeout has been seen
 volatile bool twi_do_reset_on_timeout = false;  // reset the TWI registers on timeout
+#endif
 
 uint8_t twi_defaultBuffer[32];
 
@@ -48,6 +53,8 @@ uint32_t twi_wc = 0;
 twi::callback_t *twi_cb;
 
 }
+
+uint8_t twi::last_error;
 
 /*
  * Function twi_init
@@ -75,6 +82,8 @@ void twi::init()
 
     // enable twi module, acks, and twi interrupt
     TWCR = _BV(TWEN) | _BV(TWIE) | _BV(TWEA);
+
+    last_error = TWI_OK;
 }
 
 /*
@@ -108,6 +117,7 @@ uint8_t *twi::buffer() {
 uint8_t twi::read(uint8_t sla, void *data, uint8_t len, uint8_t sendStop, callback_t cb)
 {
     if (TWI_READY != twi_state) {
+        last_error = TWI_ERR_NOT_READY;
         return TWI_ERR_NOT_READY;
     }
 
@@ -143,14 +153,15 @@ uint8_t twi::read(uint8_t sla, void *data, uint8_t len, uint8_t sendStop, callba
         twi_inRepStart = false; // remember, we're dealing with an ASYNC ISR
 
         do {
-          TWDR = twi_slarw;
-          /*
-          if((twi_timeout_us > 0ul) && ((micros() - startMicros) > twi_timeout_us)) {
-            twi_handleTimeout(twi_do_reset_on_timeout);
-            return 0;
-          }
-          */
-          ++twi_wc;
+            TWDR = twi_slarw;
+#if HAVE_TWI_TIMEOUT
+            if  ((twi_timeout_us > 0ul) && ((micros() - startMicros) > twi_timeout_us)) {
+                twi_handleTimeout(twi_do_reset_on_timeout);
+                last_error = TWI_ERR_TIMEOUT;
+                return TWI_ERR_TIMEOUT;
+            }
+#endif
+            ++twi_wc;
         } while (TWCR & _BV(TWWC));
 
         TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE); // enable INTs, but not START
@@ -159,6 +170,7 @@ uint8_t twi::read(uint8_t sla, void *data, uint8_t len, uint8_t sendStop, callba
         TWCR = _BV(TWEN) | _BV(TWIE) | _BV(TWEA) | _BV(TWINT) | _BV(TWSTA);
     }
 
+    last_error = TWI_OK;
     return TWI_OK;
 }
 
@@ -182,14 +194,14 @@ uint8_t twi_wait_ready() {
     for (uint32_t i = 0; i < 16000; ++i) {
         if (twi_cb_ready && twi_state == TWI_READY) {
             twi_cb_ready = false;
-
-            return twi_err2res();
+            return (twi::last_error = twi_err2res());
         }
 
         ++twi_wait;
-        yield();
+        artl::yield();
     }
 
+    twi::last_error = TWI_ERR_TIMEOUT;
     return TWI_ERR_TIMEOUT;
 }
 
@@ -251,6 +263,7 @@ uint8_t twi::reg_read(uint8_t sla, uint8_t reg)
 uint8_t twi::write(uint8_t sla, void *data, uint8_t len, uint8_t sendStop, callback_t cb)
 {
     if (TWI_READY != twi_state) {
+        last_error = TWI_ERR_NOT_READY;
         return TWI_ERR_NOT_READY;
     }
 
@@ -285,14 +298,14 @@ uint8_t twi::write(uint8_t sla, void *data, uint8_t len, uint8_t sendStop, callb
         twi_inRepStart = false; // remember, we're dealing with an ASYNC ISR
 
         do {
-          TWDR = twi_slarw;
-          /*
-          if((twi_timeout_us > 0ul) && ((micros() - startMicros) > twi_timeout_us)) {
-            twi_handleTimeout(twi_do_reset_on_timeout);
-            return 0;
-          }
-          */
-          ++twi_wc;
+            TWDR = twi_slarw;
+#if HAVE_TWI_TIMEOUT
+            if  ((twi_timeout_us > 0ul) && ((micros() - startMicros) > twi_timeout_us)) {
+                twi_handleTimeout(twi_do_reset_on_timeout);
+                return 0;
+            }
+#endif
+            ++twi_wc;
         } while (TWCR & _BV(TWWC));
 
         TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE); // enable INTs, but not START
@@ -301,6 +314,7 @@ uint8_t twi::write(uint8_t sla, void *data, uint8_t len, uint8_t sendStop, callb
         TWCR = _BV(TWINT) | _BV(TWEA) | _BV(TWEN) | _BV(TWIE) | _BV(TWSTA); // enable INTs
     }
 
+    last_error = TWI_OK;
     return TWI_OK;
 }
 
@@ -316,7 +330,7 @@ uint8_t twi::write(uint8_t sla, void *data, uint8_t len, uint8_t sendStop)
 uint8_t twi::reg_write(uint8_t sla, uint8_t reg, uint8_t val)
 {
     twi_defaultBuffer[0] = reg;
-    twi_defaultBuffer[1] = v;
+    twi_defaultBuffer[1] = val;
 
     return write(sla, twi_defaultBuffer, 2, true);
 }
@@ -347,18 +361,23 @@ void twi_stop()
     // wait for stop condition to be executed on bus
     // TWINT is not set after a stop condition!
     // We cannot use micros() from an ISR, so approximate the timeout with cycle-counted delays
+#if HAVE_TWI_TIMEOUT
     const uint8_t us_per_loop = 8;
     uint32_t counter = (twi_timeout_us + us_per_loop - 1) / us_per_loop; // Round up
+#endif
+
     while (TWCR & _BV(TWSTO)) {
+#if HAVE_TWI_TIMEOUT
         if (twi_timeout_us > 0ul) {
             if (counter > 0ul) {
                 _delay_us(us_per_loop);
                 counter--;
             } else {
-                //twi_handleTimeout(twi_do_reset_on_timeout);
+                twi_handleTimeout(twi_do_reset_on_timeout);
                 return;
             }
         }
+#endif
     }
 
     // update twi state
