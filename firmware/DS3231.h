@@ -21,6 +21,8 @@ struct bcd_value {
 
     bcd_value& operator=(uint8_t d) { v = d; return *this; }
 
+    explicit operator uint8_t() const { return 10 * (v >> 4) + (v & 0x0F); }
+
     uint8_t v;
 };
 
