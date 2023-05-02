@@ -1,7 +1,8 @@
 
-#define HAVE_LOG_METRICS 1
-#define HAVE_DEBUG_PRINT 1
+#define HAVE_LOG 0
+#define HAVE_DEBUG 1
 #define HAVE_TRANSMITTER 1
+#define HAVE_TONE_SWEEP 1
 
 #include "BMP280.h"
 #include "MPU9250.h"
@@ -38,7 +39,8 @@ const int servo_close_pos = 67;
 const int servo_open_pos = 30;
 const uint32_t servo_timeout = 500;
 const int save_servo_pin = 9;
-const float servo_open_threshold = 0.4;
+const float servo_open_threshold = 4.0; // m/s
+const float servo_open_min_apogee_drop = 2.0; // m
 
 using test_button = artl::digital_in<artl::port::F, 4>; // pin A3
 const int sd_cs_pin = 4;    /* SD card chip select */
@@ -64,44 +66,53 @@ const char TeamID[] = "RM";
 int Va;
 float bat = 0;
 float acc = 0;
+const float xy_ready_threshold = 0.25;
+bool xy_ready;
 
-uint32_t start_point = 0;
-uint32_t apogee_point = 0;
-uint32_t activate_point = 0;
-int landing_point = 0;
-const float min_vel = -2.0; // m / s
+float apogee_alt = 0;
+float start_alt = 0;
+const float start_min_rise = 2.0; // m
+const float start_min_acc = 9.81 * 2; // m/s**2
+
+uint8_t start_point = 0;
+uint8_t apogee_point = 0;
+uint8_t activate_point = 0;
+uint8_t landing_point = 0;
 
 kalman_filter_t<float> alti_filter(0.0, 1.0, 1.0, 0.5);
 float apogee = 0;
 float ascent_start = 0;
 float descent_start = 0;
 
-uint32_t last_wt = 0;
 uint32_t measures = 0;
+uint32_t loop_count = 0;
 
-uint32_t last_log_t = 0;
-
-#if HAVE_DEBUG_PRINT
+#if HAVE_DEBUG
 artl::timer<> debug_print_timer;
-const uint32_t debug_print_delay = 300;
+const uint32_t debug_print_delay = 10;
+buffer debug_buffer;
+bool debug_header_done = false;
+
+void debug_setup(uint32_t t);
+void debug_header();
+void debug_metrics(uint32_t t);
 #endif
 
 struct alti_history {
-    uint16_t t;
+    uint32_t t;
     float alti;
 };
 
-ring<5, alti_history> alti_ring;
+ring<10, alti_history> alti_ring;
 
-const uint32_t loop_delay_ms = 500;
-
-File log_file;
-buffer log_buffer;
-buffer debug_buffer;
-
-uint32_t transmitter_bytes = 0;
+#if HAVE_LOG
+void log_header();
+void log_setup();
+#endif
 
 #if HAVE_TRANSMITTER
+uint32_t transmitter_bytes = 0;
+
 using transmitter = uart_t<9600>;
 template<> uint8_t transmitter::write_size = 0;
 template<> const uint8_t *transmitter::write_data = 0;
@@ -111,14 +122,12 @@ buffer transmitter_buffer;
 ISR(USART1_UDRE_vect) {
     transmitter::on_dre_int();
 }
-#endif
 
 void transmitter_setup() {
-#if HAVE_TRANSMITTER
     transmitter::setup();
     transmitter_buffer.reserve(100);
-#endif
 }
+#endif
 
 float adc_to_battery(int v) {
     return 3.0 * 5.0 * v / 1023.0 + 0.29 /* diode dropout */;
@@ -131,29 +140,35 @@ ISR(ADC_vect) {
 
 using input_tc = artl::tc<4>;
 
-#if HAVE_DEBUG_PRINT
 uint32_t tc4_count = 0;
-#endif
 
 ISR(TIMER4_COMPA_vect)
 {
-#if HAVE_DEBUG_PRINT
     ++tc4_count;
-#endif
+
     ADCSRA |= (1 << ADSC); // Start Conversion
     input_tc().cnt() = 0;
 }
 
 tone_sweep_t tone_sweep;
-const float tone_sweep_threshold = 0.4;
+const float tone_sweep_threshold = 4.0; // m/s
+float last_v = 0;
 
 void alti_ring_push(uint32_t t, float v) {
     if (alti_ring.full()) alti_ring.pop_front();
-    alti_history h{(uint16_t) t, v};
+    alti_history h{t, v};
     alti_ring.push_back(h);
 }
 
 void servo_close(uint32_t t);
+
+void fat_date_time(uint16_t *date, uint16_t *time) {
+    date_time now;
+    now.read();
+
+    *date = FAT_DATE(2000 + (uint8_t) now.year(), (uint8_t) now.month(), (uint8_t) now.day());
+    *time = FAT_TIME((uint8_t) now.hour(), (uint8_t) now.minute(), (uint8_t) now.second());
+}
 
 void setup() {
     {
@@ -167,7 +182,9 @@ void setup() {
         ADCSRA |= (1 << ADIE) // Interrupt Enable
                 | (1 << ADSC); // Start Conversion
 
+#if HAVE_TRANSMITTER
         transmitter_setup();
+#endif
 
         input_tc().setup(0, 0, 4, input_tc::cs::presc_2048);
         input_tc().ocra() = 75;
@@ -193,31 +210,9 @@ void setup() {
     barometer.setup();
     imu.setup();
 
-    bool sd_ready = SD.begin(sd_cs_pin);
-    if (sd_ready) {
-        buffer fname;
-        fname.reserve(12);
-        int n = 20;
-        do {
-            n += 1;
-            fname.reset() << "data-" << n << ".txt";
-        } while (SD.exists(fname.c_str()));
-
-        log_file = SD.open(fname.c_str(), FILE_WRITE);
-        log_buffer.reserve(256); //512 + 256);
-
-        date_time now;
-        now.read();
-
-        log_buffer << now << '\n';
-
-        log_file.write(log_buffer.data(), log_buffer.length());
-        log_file.flush();
-
-        tone_sweep.beep(1046, 100);
-        tone_sweep.beep(1318, 200);
-        tone_sweep.beep(1567, 100);
-    }
+#if HAVE_LOG
+    log_setup();
+#endif
 
     if (barometer.ready()) {
         for (uint8_t i = 0; i < 5; ++i) {
@@ -230,6 +225,9 @@ void setup() {
             barometer.read();
             alti_ring_push(millis(), alti_filter(barometer.alti));
         }
+
+        apogee_alt = (float) alti_filter;
+        start_alt = (float) alti_filter;
 
         tone_sweep.beep(880, 100);
         measure_timer.schedule(millis());
@@ -250,8 +248,8 @@ void setup() {
         servo_close(t);
     }
 
-#if HAVE_DEBUG_PRINT
-    debug_print_timer.schedule(t);
+#if HAVE_DEBUG
+    debug_setup(t);
 #endif
 }
 
@@ -266,7 +264,10 @@ void send_metrics(uint32_t t) {
         << start_point << ';'
         << apogee_point << ';'
         << activate_point << ';'
-        << landing_point << '\n';
+        << landing_point << ';'
+
+        << loop_count << ';'
+        << '\n';
 
     transmitter::write(transmitter_buffer.data(), transmitter_buffer.length());
 
@@ -274,38 +275,164 @@ void send_metrics(uint32_t t) {
 }
 #endif
 
+#if HAVE_DEBUG
+void debug_setup(uint32_t t) {
+    debug_print_timer.schedule(t);
+}
+
+void debug_header() {
+    debug_buffer.ensure_capacity(90);
+    debug_buffer.reset()
+        << "Ti" << '\t'
+        << "H" << '\t'
+        << "H*" << '\t'
+        << "Vin" << '\t'
+        << "Vel" << '\t'
+        << "C" << '\t'
+        << "M" << '\t'
+        << "L" << '\t'
+        << "Temp" << '\t'
+        << "Pressure" << '\t'
+        << "Ax" << ',' << "Ay" << ',' << "Ax" << '\t'
+        << "Acc" << '\t'
+        << '\n' << '\r';
+}
+
+void debug_metrics(uint32_t t) {
+    if (debug_print_timer.update(t)) {
+        debug_print_timer.schedule(t + debug_print_delay);
+
+        if (Serial.dtr()) {
+            if (!debug_header_done) {
+                debug_header();
+                debug_header_done = true;
+            }
+
+            debug_buffer.ensure_capacity(90);
+            debug_buffer.reset()
+                << t << '\t'
+                << barometer.alti << '\t'
+                << (float) alti_filter << '\t'
+                << bat << '\t'
+                << last_v << '\t'
+                << tc4_count << '\t'
+                << measures << '\t'
+                << loop_count << '\t'
+                << barometer.temp << '\t'
+                << barometer.pres << '\t'
+                << imu.acc[0] << ',' << imu.acc[1] << ',' << imu.acc[2] << '\t'
+                << acc << '\t'
+                //<< v[3] << '\t'
+                //<< v[4] << ',' << v[5] << ',' << v[6] << '\t'
+                //<< imu.temp << '\t'
+                //<< imu.gyro[0] << ',' << imu.gyro[1] << ',' << imu.gyro[2] << '\t'
+                //<< imu.mag[0] << ',' << imu.mag[1] << ',' << imu.mag[2] << '\t'
+                //<< barometer.temp_i << '\t'
+                //<< now.year() << '/' << now.month() << '/' << now.day() << ' '
+                //<< now.hour() << ':' << now.minute() << ':' << now.second()
+                << '\n' << '\r';
+
+            {
+                crit_sec cs;
+
+                measures = 0;
+                tc4_count = 0;
+            }
+
+            Serial.write(debug_buffer.c_str(), debug_buffer.length());
+        } else {
+            debug_header_done = false;
+        }
+    }
+}
+#endif
+
+#if HAVE_LOG
+File log_file;
+buffer log_buffer;
+
+void log_setup() {
+    bool sd_ready = SD.begin(sd_cs_pin);
+    if (sd_ready) {
+        buffer fname;
+        fname.reserve(12);
+        int n = 20;
+        do {
+            n += 1;
+            fname.reset() << "data-" << n << ".txt";
+        } while (SD.exists(fname.c_str()));
+
+        SdFile::dateTimeCallback(fat_date_time);
+        log_file = SD.open(fname.c_str(), FILE_WRITE);
+        SdFile::dateTimeCallbackCancel();
+
+        log_buffer.reserve(256); //512 + 256);
+
+        log_header();
+
+        tone_sweep.beep(1046, 100);
+        tone_sweep.beep(1318, 200);
+        tone_sweep.beep(1567, 100);
+    }
+}
+
+void log_header() {
+    date_time now;
+    now.read();
+
+    log_buffer.reset() << now << '\n'
+        << "Ti" << ';'
+        << 'H' << ';'
+        << "Temp" << ';'
+        << "Pressure" << ';'
+        << "H*" << ';'
+        << "Vin" << ';'
+        << "Ax" << ';' << "Ay" << ';' << "Az" << ';'
+        << "Temp*" << ';'
+        << "Rx" << ';' << "Ry" << ';' << "Rz" << ';'
+        << "Mx" << ';' << "My" << ';' << "Mz" << ';'
+        << "Servo" << ';'
+        << "Start" << ';'
+        << "Apogee" << ';'
+        << "Activate" << ';'
+        << "Landing" << ';'
+        << "Loop" << ';'
+        << '\n';
+
+    log_file.write(log_buffer.data(), log_buffer.length());
+    log_file.flush();
+}
+
 void log_metrics(uint32_t t) {
-#if HAVE_LOG_METRICS
     log_buffer.reset()
-        << TeamID << ';'
         << t << ';'
         << barometer.alti << ';'
+        << barometer.temp << ';'
+        << barometer.pres << ';'
         << (float) alti_filter << ';'
         << bat << ';'
-        << acc << ';'
+        << imu.acc[0] << ';' << imu.acc[1] << ';' << imu.acc[2] << ';'
+        << imu.temp << ';'
+        << imu.gyro[0] << ';' << imu.gyro[1] << ';' << imu.gyro[2] << ';'
+        << imu.mag[0] << ';' << imu.mag[1] << ';' << imu.mag[2] << ';'
+        << servo_state << ';'
         << start_point << ';'
         << apogee_point << ';'
         << activate_point << ';'
         << landing_point << ';'
-        << last_wt << ';'
-        << barometer.pres << ';'
-        << barometer.temp << ';'
-        << transmitter_bytes << ";"
-        << servo_state << ';'
+        << loop_count << ';'
         << '\n';
 
     green_led::low();
     yellow_led::high();
 
-    uint32_t t1 = millis();
     log_file.write(log_buffer.data(), log_buffer.length());
     log_file.flush();
-    last_wt = millis() - t1;
 
     yellow_led::low();
     green_led::high();
-#endif
 }
+#endif
 
 void servo_activate(uint32_t t, int pos) {
     yellow_led::high();
@@ -333,6 +460,8 @@ void servo_update(uint32_t t) {
 }
 
 void loop() {
+    ++loop_count;
+
     uint32_t t = millis();
 
     bool b = test_button::read();
@@ -344,85 +473,77 @@ void loop() {
         }
     }
 
-    //artl::twi::update();
+    //twi::update();
     servo_update(t);
-    tone_sweep.update(t);
 
-    bool up = false;
+    bool measure_done = false;
 
     if (measure_timer.update(t)) {
         measure_timer.schedule(t + measure_delay);
+
+        if (imu.ready()) {
+            imu.read();
+
+            float xy_acc_2 =
+                imu.acc[0] * imu.acc[0] +
+                imu.acc[2] * imu.acc[2];
+
+            acc = sqrt(
+                xy_acc_2 +
+                imu.acc[1] * imu.acc[1]);
+
+            float xy_acc = sqrt(xy_acc_2);
+
+            xy_ready = (xy_acc / acc) < xy_ready_threshold;
+
+            green_led::write(xy_ready);
+        }
 
         if (barometer.ready()) {
             barometer.read();
         }
 
-        if (imu.ready()) {
-            imu.read();
-        }
-
         ++measures;
 
         float f = alti_filter(barometer.alti);
-        alti_history front = alti_ring.front();
-        float d = f - front.alti;
+        if (f > apogee_alt) {
+            apogee_alt = f;
+        }
 
-        if (d < -servo_open_threshold && servo_state != SERVO_OPEN) {
+        alti_history front = alti_ring.front();
+        float d = (f - front.alti) * 1000 / (t - front.t);
+
+        if (d < -servo_open_threshold &&
+            servo_state != SERVO_OPEN &&
+            (apogee_alt - f) > servo_open_min_apogee_drop) {
+            activate_point = 1;
             servo_open(t);
         }
 
         if (!tone_sweep.active()) {
             if (d > tone_sweep_threshold) {
-                tone_sweep.start(t, 880, 880 * 4, 300);
-            }
-            if (d < -tone_sweep_threshold) {
-                tone_sweep.start(t, 880 * 4, 880, 300);
+                tone_sweep.start(880, 880 * 4, 300);
+                if (!start_point && f - start_alt >= start_min_rise && acc >= start_min_acc) {
+                    start_point = 1;
+                }
+            } else if (d < -tone_sweep_threshold) {
+                tone_sweep.start(880 * 4, 880, 300);
+            } else if (!start_point && xy_ready && acc > 9 && acc < 11) {
+                start_alt = f;
             }
         }
+
+        last_v = d;
 
         alti_ring_push(t, f);
 
-        up = true;
+        measure_done = true;
     }
 
-#if HAVE_DEBUG_PRINT
-    if (debug_print_timer.update(t)) {
-        debug_print_timer.schedule(t + debug_print_delay);
+    (void) measure_done;
 
-        if (Serial.dtr()) {
-            date_time now;
-            now.read();
-
-            debug_buffer.ensure_capacity(90);
-            debug_buffer.reset()
-                << now << '\t'
-                << barometer.alti << '\t'
-                << (float) alti_filter << '\t'
-                << bat << '\t'
-                << tc4_count << '\t'
-                << measures << '\t'
-                << barometer.temp << '\t'
-                << barometer.pres << '\t'
-                << imu.acc[0] << ',' << imu.acc[1] << ',' << imu.acc[2] << '\t'
-                //<< v[3] << '\t'
-                //<< v[4] << ',' << v[5] << ',' << v[6] << '\t'
-                << imu.temp << '\t'
-                << imu.mag[0] << ',' << imu.mag[1] << ',' << imu.mag[2] << '\t'
-                //<< barometer.temp_i << '\t'
-                //<< now.year() << '/' << now.month() << '/' << now.day() << ' '
-                //<< now.hour() << ':' << now.minute() << ':' << now.second()
-                << '\n' << '\r';
-
-            {
-                crit_sec cs;
-
-                measures = 0;
-                tc4_count = 0;
-            }
-
-            Serial.write(debug_buffer.c_str(), debug_buffer.length());
-        }
-    }
+#if HAVE_DEBUG
+    debug_metrics(t);
 #endif
 
 #if HAVE_TRANSMITTER
@@ -431,10 +552,11 @@ void loop() {
     }
 #endif
 
-    if (log_file && up) { // && (t - last_log_t) > 100) {
-        last_log_t = t;
+#if HAVE_LOG
+    if (log_file && measure_done) {
         log_metrics(t);
     }
+#endif
 
     artl::yield();
 }
