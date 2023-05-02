@@ -39,8 +39,6 @@ const int servo_close_pos = 67;
 const int servo_open_pos = 30;
 const uint32_t servo_timeout = 500;
 const int save_servo_pin = 9;
-const float servo_open_threshold = 4.0; // m/s
-const float servo_open_min_apogee_drop = 2.0; // m
 
 using test_button = artl::digital_in<artl::port::F, 4>; // pin A3
 const int sd_cs_pin = 4;    /* SD card chip select */
@@ -69,10 +67,21 @@ float acc = 0;
 const float xy_ready_threshold = 0.25;
 bool xy_ready;
 
-float apogee_alt = 0;
-float start_alt = 0;
-const float start_min_rise = 2.0; // m
+enum move_dir_t {
+    MOVE_DIR_NONE,
+    MOVE_DIR_UP,
+    MOVE_DIR_DOWN,
+};
+move_dir_t move_dir = MOVE_DIR_NONE;
+float dir_start;
+
+const float start_min_ascent = 2.0; // m
 const float start_min_acc = 9.81 * 2; // m/s**2
+
+const float apogee_min_descent = 2.0; // m
+
+const float activate_min_speed = 4.0; // m/s
+const float activate_min_descent = 2.0; // m
 
 uint8_t start_point = 0;
 uint8_t apogee_point = 0;
@@ -225,9 +234,6 @@ void setup() {
             barometer.read();
             alti_ring_push(millis(), alti_filter(barometer.alti));
         }
-
-        apogee_alt = (float) alti_filter;
-        start_alt = (float) alti_filter;
 
         tone_sweep.beep(880, 100);
         measure_timer.schedule(millis());
@@ -506,30 +512,58 @@ void loop() {
         ++measures;
 
         float f = alti_filter(barometer.alti);
-        if (f > apogee_alt) {
-            apogee_alt = f;
-        }
 
         alti_history front = alti_ring.front();
         float d = (f - front.alti) * 1000 / (t - front.t);
 
-        if (d < -servo_open_threshold &&
-            servo_state != SERVO_OPEN &&
-            (apogee_alt - f) > servo_open_min_apogee_drop) {
+        move_dir_t new_move_dir;
+
+        if (d > 0) {
+            new_move_dir = MOVE_DIR_UP;
+        } else if (d < 0) {
+            new_move_dir = MOVE_DIR_DOWN;
+        } else {
+            new_move_dir = MOVE_DIR_NONE;
+        }
+
+        if (move_dir != new_move_dir) {
+            move_dir = new_move_dir;
+            dir_start = f;
+        }
+
+        if (!start_point
+            && move_dir == MOVE_DIR_UP
+            && (f - dir_start) >= start_min_ascent
+            && acc >= start_min_acc) {
+            start_point = 1;
+        }
+
+        if (!apogee_point
+            && move_dir == MOVE_DIR_DOWN
+            && (dir_start - f) >= apogee_min_descent) {
+            apogee_point = 1;
+        }
+
+        if (move_dir == MOVE_DIR_DOWN
+            && (dir_start - f) >= activate_min_descent
+            && d < -activate_min_speed
+            && servo_state != SERVO_OPEN) {
             activate_point = 1;
             servo_open(t);
+        }
+
+        if (!landing_point
+            && start_point
+            && apogee_point
+            && move_dir != MOVE_DIR_DOWN) {
+            landing_point = 1;
         }
 
         if (!tone_sweep.active()) {
             if (d > tone_sweep_threshold) {
                 tone_sweep.start(880, 880 * 4, 300);
-                if (!start_point && f - start_alt >= start_min_rise && acc >= start_min_acc) {
-                    start_point = 1;
-                }
             } else if (d < -tone_sweep_threshold) {
                 tone_sweep.start(880 * 4, 880, 300);
-            } else if (!start_point && xy_ready && acc > 9 && acc < 11) {
-                start_alt = f;
             }
         }
 
