@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import serial
 import sys
 import time
@@ -9,8 +9,11 @@ if len(sys.argv) < 2:
         print(f'{p[0]}: {p[1]}')
     exit()
 
-#rate = 115200
-rate = 9600
+if len(sys.argv) >= 3:
+    rate = int(sys.argv[2])
+else:
+    #rate = 115200
+    rate = 9600
 
 def connect():
     with serial.Serial(sys.argv[1], rate, timeout=1) as ser:
