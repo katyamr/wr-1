@@ -277,44 +277,45 @@ struct tc<1> {
 
 template<>
 struct tc<3> {
-    volatile uint8_t& imsk() { return TIMSK3; }
+    static uint8_t imsk() { return TIMSK3; }
+    static imsk(uint8_t v) { TIMSK3 = v; }
 
     template<int B>
     struct imsk_bit {
-        void enable() const { TIMSK3 |= (1 << B); }
-        void disable() const { TIMSK3 &= ~(1 << B); }
+        static void enable() { TIMSK3 |= (1 << B); }
+        static void disable() { TIMSK3 &= ~(1 << B); }
     };
 
     // Output Compare A Match Interrupt
-    imsk_bit<OCIE3A> oca() const { return imsk_bit<OCIE3A>(); }
+    using oca = imsk_bit<OCIE3A>;
 
-    // Output Compare B Match Interrupt 
-    imsk_bit<OCIE3B> ocb() const { return imsk_bit<OCIE3B>(); }
+    // Output Compare B Match Interrupt
+    using ocb = imsk_bit<OCIE3B>;
 
     // Overflow Interrupt
-    imsk_bit<TOIE3> overflow() const { return imsk_bit<TOIE3>(); }
+    using overflow = imsk_bit<TOIE3>;
 
     // Control Register A
-    volatile uint8_t& cra() { return TCCR3A; }
+    static uint8_t cra() { return TCCR3A; }
+    static void cra(uint8_t v) { return TCCR3A = v; }
     // Control Register B
-    volatile uint8_t& crb() { return TCCR3B; }
+    static uint8_t crb() { return TCCR3B; }
+    static void crb(uint8_t v) { return TCCR3B = v; }
     // Control Register C
-    volatile uint8_t& crc() { return TCCR3C; }
+    static uint8_t crc() { return TCCR3C; }
+    static void crc(uint8_t v) { return TCCR3C = v; }
 
     // Output Compare Register A
-    volatile uint16_t& ocra() { return OCR3A; }
-    volatile uint8_t& ocral() { return OCR3AL; }
-    volatile uint8_t& ocrah() { return OCR3AH; }
+    static uint16_t ocra() { return OCR3A; }
+    static void ocra(uint16_t v) { OCR3A = v; }
 
     // Output Compare Register B
-    volatile uint16_t& ocrb() { return OCR3B; }
-    volatile uint8_t& ocrbl() { return OCR3BL; }
-    volatile uint8_t& ocrbh() { return OCR3BH; }
+    static uint16_t ocrb() { return OCR3B; }
+    static void ocrb(uint16_t v) { OCR3B = v; }
 
     // Counter Value
-    volatile uint16_t& cnt() { return TCNT3; }
-    volatile uint8_t& cntl() { return TCNT3L; }
-    volatile uint8_t& cnth() { return TCNT3H; }
+    static uint16_t cnt() { return TCNT3; }
+    static void cnt(uint16_t v) { TCNT3 = v; }
 
     // Clock Source
     struct cs {
@@ -327,6 +328,8 @@ struct tc<3> {
             presc_1024  = (1 << CS32) | (0 << CS31) | (1 << CS30),
             ext_falling = (1 << CS32) | (1 << CS31) | (0 << CS30),
             ext_rising  = (1 << CS32) | (1 << CS31) | (1 << CS30),
+
+            mask        = (1 << CS32) | (1 << CS31) | (1 << CS30),
         };
     };
 
@@ -340,12 +343,15 @@ struct tc<3> {
         };
     };
 
-    void setup(uint8_t com_a, uint8_t com_b, uint8_t wgm, uint8_t cs) {
-        cra() = ( (com_a & 0x03) << COM3A0 ) |
-                ( (com_b & 0x03) << COM3B0 ) |
-                ( (wgm & 0x03) << WGM30 );
-        crb() = ( ((wgm >> 2) & 0x03) << WGM32 ) |
-                ( (cs & 0x07) << CS30 );
+    static uint8_t clk_src() { return crb() & cs::mask; }
+    static void clk_src(uint8_t cs) { crb((crb() & ~cs::mask) | cs); }
+
+    static void setup(uint8_t com_a, uint8_t com_b, uint8_t wgm, uint8_t cs) {
+        cra( ( (com_a & 0x03) << COM3A0 ) |
+             ( (com_b & 0x03) << COM3B0 ) |
+             ( (wgm & 0x03) << WGM30 ) );
+        crb( ( ((wgm >> 2) & 0x03) << WGM32 ) |
+             ( (cs & 0x07) ) );
     }
 };
 
