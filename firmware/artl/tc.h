@@ -278,7 +278,7 @@ struct tc<1> {
 template<>
 struct tc<3> {
     static uint8_t imsk() { return TIMSK3; }
-    static imsk(uint8_t v) { TIMSK3 = v; }
+    static void imsk(uint8_t v) { TIMSK3 = v; }
 
     template<int B>
     struct imsk_bit {
@@ -297,13 +297,13 @@ struct tc<3> {
 
     // Control Register A
     static uint8_t cra() { return TCCR3A; }
-    static void cra(uint8_t v) { return TCCR3A = v; }
+    static void cra(uint8_t v) { TCCR3A = v; }
     // Control Register B
     static uint8_t crb() { return TCCR3B; }
-    static void crb(uint8_t v) { return TCCR3B = v; }
+    static void crb(uint8_t v) { TCCR3B = v; }
     // Control Register C
     static uint8_t crc() { return TCCR3C; }
-    static void crc(uint8_t v) { return TCCR3C = v; }
+    static void crc(uint8_t v) { TCCR3C = v; }
 
     // Output Compare Register A
     static uint16_t ocra() { return OCR3A; }
@@ -362,7 +362,7 @@ struct tc<3> {
 template<>
 struct tc<4> {
     static uint8_t imsk() { return TIMSK4; }
-    static imsk(uint8_t v) { TIMSK4 = v; }
+    static void imsk(uint8_t v) { TIMSK4 = v; }
 
     template<int B>
     struct imsk_bit {
@@ -381,19 +381,19 @@ struct tc<4> {
 
     // Control Register A
     static uint8_t cra() { return TCCR4A; }
-    static void cra(uint8_t v) { return TCCR4A = v; }
+    static void cra(uint8_t v) { TCCR4A = v; }
     // Control Register B
     static uint8_t crb() { return TCCR4B; }
-    static void crb(uint8_t v) { return TCCR4B = v; }
+    static void crb(uint8_t v) { TCCR4B = v; }
     // Control Register C
     static uint8_t crc() { return TCCR4C; }
-    static void crc(uint8_t v) { return TCCR4C = v; }
+    static void crc(uint8_t v) { TCCR4C = v; }
     // Control Register D
     static uint8_t crd() { return TCCR4D; }
-    static void crd(uint8_t v) { return TCCR4D = v; }
+    static void crd(uint8_t v) { TCCR4D = v; }
     // Control Register E
     static uint8_t cre() { return TCCR4E; }
-    static void cre(uint8_t v) { return TCCR4E = v; }
+    static void cre(uint8_t v) { TCCR4E = v; }
 
     // Output Compare Register A
     static uint8_t ocra() { return OCR4A; }
