@@ -361,50 +361,59 @@ struct tc<3> {
 
 template<>
 struct tc<4> {
-    volatile uint8_t& imsk() { return TIMSK4; }
+    static uint8_t imsk() { return TIMSK4; }
+    static imsk(uint8_t v) { TIMSK4 = v; }
 
     template<int B>
     struct imsk_bit {
-        void enable() const { TIMSK4 |= (1 << B); }
-        void disable() const { TIMSK4 &= ~(1 << B); }
+        static void enable() { TIMSK4 |= (1 << B); }
+        static void disable() { TIMSK4 &= ~(1 << B); }
     };
 
     // Output Compare A Match Interrupt
-    imsk_bit<OCIE4A> oca() const { return imsk_bit<OCIE4A>(); }
+    using oca = imsk_bit<OCIE4A>;
 
-    // Output Compare B Match Interrupt 
-    imsk_bit<OCIE4B> ocb() const { return imsk_bit<OCIE4B>(); }
+    // Output Compare B Match Interrupt
+    using ocb = imsk_bit<OCIE4B>;
 
     // Overflow Interrupt
-    imsk_bit<TOIE4> overflow() const { return imsk_bit<TOIE4>(); }
+    using overflow = imsk_bit<TOIE4>;
 
     // Control Register A
-    volatile uint8_t& cra() { return TCCR4A; }
+    static uint8_t cra() { return TCCR4A; }
+    static void cra(uint8_t v) { return TCCR4A = v; }
     // Control Register B
-    volatile uint8_t& crb() { return TCCR4B; }
+    static uint8_t crb() { return TCCR4B; }
+    static void crb(uint8_t v) { return TCCR4B = v; }
     // Control Register C
-    volatile uint8_t& crc() { return TCCR4C; }
+    static uint8_t crc() { return TCCR4C; }
+    static void crc(uint8_t v) { return TCCR4C = v; }
     // Control Register D
-    volatile uint8_t& crd() { return TCCR4D; }
+    static uint8_t crd() { return TCCR4D; }
+    static void crd(uint8_t v) { return TCCR4D = v; }
     // Control Register E
-    volatile uint8_t& cre() { return TCCR4E; }
+    static uint8_t cre() { return TCCR4E; }
+    static void cre(uint8_t v) { return TCCR4E = v; }
 
     // Output Compare Register A
-    volatile uint8_t& ocra() { return OCR4A; }
+    static uint8_t ocra() { return OCR4A; }
+    static void ocra(uint8_t v) { OCR4A = v; }
 
     // Output Compare Register B
-    volatile uint8_t& ocrb() { return OCR4B; }
+    static uint8_t ocrb() { return OCR4B; }
+    static void ocrb(uint8_t v) { OCR4B = v; }
 
     // Output Compare Register C
-    volatile uint8_t& ocrc() { return OCR4C; }
+    static uint8_t ocrc() { return OCR4C; }
+    static void ocrc(uint8_t v) { OCR4C = v; }
 
     // Output Compare Register D
-    volatile uint8_t& ocrd() { return OCR4D; }
+    static uint8_t ocrd() { return OCR4D; }
+    static void ocrd(uint8_t v) { OCR4D = v; }
 
     // Counter Value
-    volatile uint16_t& cnt() { return TCNT4; }
-    volatile uint8_t& cntl() { return TCNT4L; }
-    volatile uint8_t& cnth() { return TCNT4H; }
+    static uint16_t cnt() { return TCNT4; }
+    static void cnt(uint16_t v) { TCNT4 = v; }
 
     // Clock Source
     struct cs {
@@ -438,11 +447,11 @@ struct tc<4> {
         };
     };
 
-    void setup(uint8_t com_a, uint8_t com_b, uint8_t pwm, uint8_t cs) {
-        cra() = ( (com_a & 0x03) << COM4A0 ) |
-                ( (com_b & 0x03) << COM4B0 ) |
-                ( (pwm & 0x03) << PWM4B );
-        crb() = ( (cs & 0x0F) << CS40 );
+    static void setup(uint8_t com_a, uint8_t com_b, uint8_t pwm, uint8_t cs) {
+        cra( ( (com_a & 0x03) << COM4A0 ) |
+             ( (com_b & 0x03) << COM4B0 ) |
+             ( (pwm & 0x03) << PWM4B ) );
+        crb( ( (cs & 0x0F) ) );
     }
 };
 

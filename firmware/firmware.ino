@@ -155,7 +155,7 @@ ISR(TIMER4_COMPA_vect)
     ++tc4_count;
 
     ADCSRA |= (1 << ADSC); // Start Conversion
-    input_tc().cnt() = 0;
+    input_tc::cnt(0);
 }
 
 tone_sweep_t tone_sweep;
@@ -194,10 +194,10 @@ void setup() {
         transmitter_setup();
 #endif
 
-        input_tc().setup(0, 0, 4, input_tc::cs::presc_2048);
-        input_tc().ocra() = 75;
-        input_tc().cnt() = 0;
-        input_tc().oca().enable();
+        input_tc::setup(0, 0, 4, input_tc::cs::presc_2048);
+        input_tc::ocra(75);
+        input_tc::cnt(0);
+        input_tc::oca::enable();
     }
 
     Serial.begin(115200);
