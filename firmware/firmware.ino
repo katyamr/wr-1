@@ -1,20 +1,20 @@
 
 #define HAVE_LOG 0
 #define HAVE_DEBUG 1
+#define HAVE_HEARTBEAT 0
 #define HAVE_TRANSMITTER 1
+#define HAVE_TWI 1
 
 #include "BMP280.h"
 #include "MPU9250.h"
 #include "DS3231.h"
 
 #include <Servo.h>
-#include <SD.h>
 
 #include "buffer.h"
 #include "kalman_filter.h"
 #include "tone_sweep.h"
 
-#include "uart.h"
 #include "ring.h"
 
 #include "artl/button.h"
@@ -25,7 +25,9 @@
 #include "artl/yield.h"
 #include "crit_sec.h"
 
+#if HAVE_TWI
 #include "twi.h"
+#endif
 
 enum {
     SERVO_UNKNOWN,
@@ -97,13 +99,29 @@ uint32_t loop_count = 0;
 
 #if HAVE_DEBUG
 artl::timer<> debug_print_timer;
-const uint32_t debug_print_delay = 10;
+const uint32_t debug_print_delay = 500;
 buffer debug_buffer;
 bool debug_header_done = false;
 
 void debug_setup(uint32_t t);
 void debug_header();
 void debug_metrics(uint32_t t);
+#endif
+
+#if HAVE_HEARTBEAT
+artl::timer<> heartbeat_timer;
+const uint32_t heartbeat_delay = 100;
+
+using rxled = artl::digital_out<artl::port::B, 0>;
+using txled = artl::digital_out<artl::port::D, 5>;
+
+void heartbeat(uint32_t t) {
+    if (heartbeat_timer.update(t)) {
+        heartbeat_timer.schedule(t + heartbeat_delay);
+
+        rxled::toggle();
+    }
+}
 #endif
 
 struct alti_history {
@@ -119,7 +137,7 @@ void log_setup();
 #endif
 
 #if HAVE_TRANSMITTER
-uint32_t transmitter_bytes = 0;
+#include "uart.h"
 
 using transmitter = uart_t<9600>;
 template<> uint8_t transmitter::write_size = 0;
@@ -170,15 +188,21 @@ void alti_ring_push(uint32_t t, float v) {
 
 void servo_close(uint32_t t);
 
-void fat_date_time(uint16_t *date, uint16_t *time) {
-    date_time now;
-    now.read();
-
-    *date = FAT_DATE(2000 + (uint8_t) now.year(), (uint8_t) now.month(), (uint8_t) now.day());
-    *time = FAT_TIME((uint8_t) now.hour(), (uint8_t) now.minute(), (uint8_t) now.second());
-}
-
 void setup() {
+#if HAVE_HEARTBEAT
+    rxled::setup();
+    txled::setup();
+
+    for (uint8_t i = 0; i < 6; ++i) {
+        rxled::toggle();
+        delay(heartbeat_delay);
+    }
+#endif
+
+#if HAVE_DEBUG
+    Serial.begin(115200);
+#endif
+
     {
         crit_sec cs;
 
@@ -200,9 +224,9 @@ void setup() {
         input_tc::oca::enable();
     }
 
-    Serial.begin(115200);
-
+#if HAVE_TWI
     twi::init();
+#endif
 
     test_button::setup();
     green_led::setup();
@@ -215,8 +239,10 @@ void setup() {
     gy91_id::high();
 
     tone_sweep.setup();
+#if HAVE_TWI
     barometer.setup();
     imu.setup();
+#endif
 
 #if HAVE_LOG
     log_setup();
@@ -256,6 +282,15 @@ void setup() {
 #if HAVE_DEBUG
     debug_setup(t);
 #endif
+
+#if HAVE_HEARTBEAT
+    for (uint8_t i = 0; i < 6; ++i) {
+        txled::toggle();
+        delay(heartbeat_delay);
+    }
+
+    heartbeat_timer.schedule(t + heartbeat_delay);
+#endif
 }
 
 #if HAVE_TRANSMITTER
@@ -275,8 +310,6 @@ void send_metrics(uint32_t t) {
         << '\n';
 
     transmitter::write(transmitter_buffer.data(), transmitter_buffer.length());
-
-    transmitter_bytes += transmitter_buffer.length();
 }
 #endif
 
@@ -301,60 +334,79 @@ void debug_header() {
         << "Ax" << ',' << "Ay" << ',' << "Ax" << '\t'
         << "Acc" << '\t'
         << '\n' << '\r';
+
+    Serial.write(debug_buffer.c_str(), debug_buffer.length());
 }
 
 void debug_metrics(uint32_t t) {
-    if (debug_print_timer.update(t)) {
-        debug_print_timer.schedule(t + debug_print_delay);
-
-        if (Serial.dtr()) {
-            if (!debug_header_done) {
-                debug_header();
-                debug_header_done = true;
-            }
-
-            debug_buffer.ensure_capacity(90);
-            debug_buffer.reset()
-                << t << '\t'
-                << barometer.alti << '\t'
-                << (float) alti_filter << '\t'
-                << bat << '\t'
-                << last_v << '\t'
-                << tc4_count << '\t'
-                << measures << '\t'
-                << loop_count << '\t'
-                << barometer.temp << '\t'
-                << barometer.pres << '\t'
-                << imu.acc[0] << ',' << imu.acc[1] << ',' << imu.acc[2] << '\t'
-                << acc << '\t'
-                //<< v[3] << '\t'
-                //<< v[4] << ',' << v[5] << ',' << v[6] << '\t'
-                //<< imu.temp << '\t'
-                //<< imu.gyro[0] << ',' << imu.gyro[1] << ',' << imu.gyro[2] << '\t'
-                //<< imu.mag[0] << ',' << imu.mag[1] << ',' << imu.mag[2] << '\t'
-                //<< barometer.temp_i << '\t'
-                //<< now.year() << '/' << now.month() << '/' << now.day() << ' '
-                //<< now.hour() << ':' << now.minute() << ':' << now.second()
-                << '\n' << '\r';
-
-            {
-                crit_sec cs;
-
-                measures = 0;
-                tc4_count = 0;
-            }
-
-            Serial.write(debug_buffer.c_str(), debug_buffer.length());
-        } else {
-            debug_header_done = false;
-        }
+    while (Serial.available()) {
+        (void) Serial.read();
     }
+
+    if (!debug_print_timer.update(t)) {
+        return;
+    }
+
+    debug_print_timer.schedule(t + debug_print_delay);
+
+    if (Serial.dtr() == 0) {
+        debug_header_done = false;
+        return;
+    }
+
+    if (!debug_header_done) {
+        debug_header();
+        debug_header_done = true;
+    }
+
+    debug_buffer.ensure_capacity(90);
+    debug_buffer.reset()
+        << t << '\t'
+        << barometer.alti << '\t'
+        << (float) alti_filter << '\t'
+        << bat << '\t'
+        << last_v << '\t'
+        << tc4_count << '\t'
+        << measures << '\t'
+        << loop_count << '\t'
+        << barometer.temp << '\t'
+        << barometer.pres << '\t'
+        << imu.acc[0] << ',' << imu.acc[1] << ',' << imu.acc[2] << '\t'
+        << acc << '\t'
+        //<< v[3] << '\t'
+        //<< v[4] << ',' << v[5] << ',' << v[6] << '\t'
+        //<< imu.temp << '\t'
+        //<< imu.gyro[0] << ',' << imu.gyro[1] << ',' << imu.gyro[2] << '\t'
+        //<< imu.mag[0] << ',' << imu.mag[1] << ',' << imu.mag[2] << '\t'
+        //<< barometer.temp_i << '\t'
+        //<< now.year() << '/' << now.month() << '/' << now.day() << ' '
+        //<< now.hour() << ':' << now.minute() << ':' << now.second()
+        << '\n' << '\r';
+
+    {
+        crit_sec cs;
+
+        measures = 0;
+        tc4_count = 0;
+    }
+
+    Serial.write(debug_buffer.c_str(), debug_buffer.length());
 }
 #endif
 
 #if HAVE_LOG
+#include <SD.h>
+
 File log_file;
 buffer log_buffer;
+
+void fat_date_time(uint16_t *date, uint16_t *time) {
+    date_time now;
+    now.read();
+
+    *date = FAT_DATE(2000 + (uint8_t) now.year(), (uint8_t) now.month(), (uint8_t) now.day());
+    *time = FAT_TIME((uint8_t) now.hour(), (uint8_t) now.minute(), (uint8_t) now.second());
+}
 
 void log_setup() {
     bool sd_ready = SD.begin(sd_cs_pin);
@@ -574,6 +626,10 @@ void loop() {
     }
 
     (void) measure_done;
+
+#if HAVE_HEARTBEAT
+    heartbeat(t);
+#endif
 
 #if HAVE_DEBUG
     debug_metrics(t);
