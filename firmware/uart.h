@@ -11,25 +11,25 @@ struct baud_traits { };
 template<>
 struct baud_traits<115200, 16000000> {
 // F_CPU = 16 MHz, BAUD = 115200, UBRRH = 0, UBRRL = 8
-    enum { ubrrh = 0x00, ubrrl = 0x08, };
+    enum { ubrrh = 0x00, ubrrl = 0x08, ucsra = 0, };
 };
 
 template<>
 struct baud_traits<31250, 16000000> {
 // F_CPU = 16 MHz, BAUD = 31250, UBRRH = 0, UBRRL = 31 (0x1F)
-    enum { ubrrh = 0x00, ubrrl = 0x1F, };
+    enum { ubrrh = 0x00, ubrrl = 0x1F, ucsra = 0, };
 };
 
 template<>
 struct baud_traits<19200, 16000000> {
 // F_CPU = 16 MHz, BAUD = 19200, UBRRH = 0, UBRRL = 51 (0x33)
-    enum { ubrrh = 0x00, ubrrl = 0x33, };
+    enum { ubrrh = 0x00, ubrrl = 0x33, ucsra = 0, };
 };
 
 template<>
 struct baud_traits<9600, 16000000> {
 // F_CPU = 16 MHz, BAUD = 9600, UBRRH = 0, UBRRL = 103 (0x67)
-    enum { ubrrh = 0x00, ubrrl = 0x67, };
+    enum { ubrrh = 0x00, ubrrl = 0x67, ucsra = 0, };
 };
 
 template<
@@ -67,8 +67,13 @@ struct uart_t {
     static void setup() {
         UBRR1H = BAUD_TRAITS::ubrrh;
         UBRR1L = BAUD_TRAITS::ubrrl;
+        UCSR1A = BAUD_TRAITS::ucsra;
 
-        csrb() = (1 << RXEN1) | (1 << TXEN1) | (1 << RXCIE1);
+        UCSR1C = 0x06; // 8N1
+
+        csrb() = (1 << TXEN1);
+        // Disable RX for now
+        // csrb() = (1 << RXEN1) | (1 << TXEN1) | (1 << RXCIE1);
     }
 
     static bool write_ready() { return write_size == 0; }
