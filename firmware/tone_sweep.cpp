@@ -1,8 +1,10 @@
-#define HAVE_TONE_SWEEP 1
+
+#include "config.h"
 
 #include "tone_sweep.h"
 
 #include <avr/interrupt.h>
+
 #include "artl/tc.h"
 #include "artl/digital_out.h"
 #include "artl/yield.h"
