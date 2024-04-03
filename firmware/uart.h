@@ -15,6 +15,12 @@ struct baud_traits<115200, 16000000> {
 };
 
 template<>
+struct baud_traits<57600, 16000000> {
+// F_CPU = 16 MHz, BAUD = 57600, UBRRH = 0, UBRRL = 8
+    enum { ubrrh = 0x00, ubrrl = 0x10, ucsra = 0, };
+};
+
+template<>
 struct baud_traits<31250, 16000000> {
 // F_CPU = 16 MHz, BAUD = 31250, UBRRH = 0, UBRRL = 31 (0x1F)
     enum { ubrrh = 0x00, ubrrl = 0x1F, ucsra = 0, };
