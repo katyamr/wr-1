@@ -13,13 +13,28 @@
 
 #include "ring.h"
 
-#include "artl/button.h"
 #include "artl/digital_in.h"
 #include "artl/digital_out.h"
-#include "artl/timer.h"
 #include "artl/tc.h"
 #include "artl/yield.h"
+#include "artl/stimer.h"
 #include "crit_sec.h"
+
+enum {
+    TIMER_NONE,
+    TIMER_SERVO,
+    TIMER_TEST_DEBOUNCE,
+#if HAVE_DEBUG
+    TIMER_DEBUG,
+#endif
+#if HAVE_HEARTBEAT
+    TIMER_HEARTBEAT,
+#endif
+
+    TIMER_MAX,
+};
+
+artl::stimer<TIMER_MAX> timers;
 
 #if HAVE_TWI
 #include "twi.h"
@@ -34,7 +49,7 @@ enum {
 Servo save_servo;
 const int servo_close_pos = 67;
 const int servo_open_pos = 30;
-const uint32_t servo_timeout = 500;
+const uint32_t servo_timeout = 500; // ms
 const int save_servo_pin = 9;
 
 using test_button = artl::digital_in<artl::port::F, 4>; // pin A3
@@ -44,11 +59,10 @@ const int battery_pin = A2;
 // AD0/SDO to change BMP280 & MPU9250 i2c IDs
 using gy91_id = artl::digital_out<artl::port::F, 7>; // pin A0
 
-artl::button<> button_state;
-artl::timer<> servo_timer;
+bool test_button_state;
+const uint32_t debounce_time = 5; // ms
 
 BMP280 barometer;
-artl::timer<> measure_timer;
 const uint32_t measure_delay = 10; // ms
 
 MPU9250 imu;
@@ -153,9 +167,10 @@ void alti_ring_push(uint32_t t, float v) {
 void servo_activate(uint32_t t, int pos);
 void servo_open(uint32_t t);
 void servo_close(uint32_t t);
-void servo_update(uint32_t t);
+void servo_timer(uint32_t t);
 
 void setup() {
+    timers.setup();
     heartbeat_setup();
 
     {
@@ -182,7 +197,7 @@ void setup() {
     green_led::setup();
     yellow_led::setup();
 
-    int buttonState = test_button::read();
+    test_button_state = test_button::read();
 
     // Pull UP AD0/SDO to change BMP280 & MPU9250 i2c IDs
     gy91_id::setup();
@@ -212,7 +227,6 @@ void setup() {
         }
 
         tone_sweep.beep(880, 100);
-        measure_timer.schedule(millis());
     }
 
     if (bat < 6.5) {
@@ -226,7 +240,7 @@ void setup() {
 
     green_led::high();
 
-    if (buttonState) {
+    if (test_button_state) {
         servo_close(t);
     }
 
@@ -240,22 +254,42 @@ void loop() {
     uint32_t t = millis();
 
     bool b = test_button::read();
-    if (button_state.update(b, t) && button_state.down()) {
-        if (!servo_timer.active()) {
-            servo_open(t);
-        } else {
-            servo_close(t);
+    if (b != test_button_state) {
+        test_button_state = b;
+        timers.schedule(TIMER_TEST_DEBOUNCE, t + debounce_time);
+    }
+
+    uint32_t tres = timers.update(t);
+    while (tres != TIMER_NONE) {
+        switch (tres) {
+        case TIMER_SERVO:
+            servo_timer(t);
+            break;
+        case TIMER_TEST_DEBOUNCE:
+            if (test_button_state) {
+                if (!timers.active(TIMER_SERVO)) {
+                    servo_open(t);
+                } else {
+                    servo_close(t);
+                }
+            }
+            break;
+#if HAVE_DEBUG
+        case TIMER_DEBUG:
+            debug_metrics(t);
+            break;
+#endif
+#if HAVE_HEARTBEAT
+        case TIMER_HEARTBEAT:
+            heartbeat(t);
+            break;
+#endif
         }
+        tres = timers.update(t);
     }
 
     //twi::update();
-    servo_update(t);
-
     bool measure_done = false;
-
-    if (measure_timer.update(t)) {
-        measure_timer.schedule(t + measure_delay);
-    }
 
     if (time_to_measure) {
         time_to_measure = 0;
@@ -349,8 +383,6 @@ void loop() {
 
     (void) measure_done;
 
-    heartbeat(t);
-    debug_metrics(t);
     transmitter_send_metrics(t);
 
     if (measure_done) {
@@ -365,7 +397,7 @@ void servo_activate(uint32_t t, int pos) {
     save_servo.attach(save_servo_pin);
     save_servo.write(pos);
 
-    servo_timer.schedule(t + servo_timeout);
+    timers.schedule(TIMER_SERVO, t + servo_timeout);
 }
 
 void servo_open(uint32_t t) {
@@ -378,11 +410,9 @@ void servo_close(uint32_t t) {
     servo_state = SERVO_CLOSED;
 }
 
-void servo_update(uint32_t t) {
-    if (servo_timer.update(t)) {
-        yellow_led::low();
-        save_servo.detach();
-    }
+void servo_timer(uint32_t /* t */) {
+    yellow_led::low();
+    save_servo.detach();
 }
 
 #if HAVE_TRANSMITTER
@@ -549,14 +579,13 @@ void log_metrics(uint32_t) { }
 #endif
 
 #if HAVE_DEBUG
-artl::timer<> debug_print_timer;
 buffer debug_buffer;
 bool debug_header_done = false;
 
 void debug_setup(uint32_t t) {
     Serial.begin(115200);
 
-    debug_print_timer.schedule(t);
+    timers.schedule(TIMER_DEBUG, t + debug_print_delay);
 }
 
 void debug_header() {
@@ -584,11 +613,7 @@ void debug_metrics(uint32_t t) {
         (void) Serial.read();
     }
 
-    if (!debug_print_timer.update(t)) {
-        return;
-    }
-
-    debug_print_timer.schedule(t + debug_print_delay);
+    timers.schedule(TIMER_DEBUG, t + debug_print_delay);
 
     if (Serial.dtr() == 0) {
         debug_header_done = false;
@@ -640,7 +665,6 @@ void debug_metrics(uint32_t) { }
 #endif
 
 #if HAVE_HEARTBEAT
-artl::timer<> heartbeat_timer;
 const uint32_t heartbeat_delay = 100;
 
 using rxled = artl::digital_out<artl::port::B, 0>;
@@ -649,28 +673,16 @@ using txled = artl::digital_out<artl::port::D, 5>;
 void heartbeat_setup() {
     rxled::setup();
     txled::setup();
-
-    for (uint8_t i = 0; i < 6; ++i) {
-        rxled::toggle();
-        delay(heartbeat_delay);
-    }
 }
 
 void heartbeat_start(uint32_t t) {
-    for (uint8_t i = 0; i < 6; ++i) {
-        txled::toggle();
-        delay(heartbeat_delay);
-    }
-
-    heartbeat_timer.schedule(t + heartbeat_delay);
+    timers.schedule(TIMER_HEARTBEAT, t + heartbeat_delay);
 }
 
 void heartbeat(uint32_t t) {
-    if (heartbeat_timer.update(t)) {
-        heartbeat_timer.schedule(t + heartbeat_delay);
+    timers.schedule(TIMER_HEARTBEAT, t + heartbeat_delay);
 
-        rxled::toggle();
-    }
+    rxled::toggle();
 }
 #else
 void heartbeat_setup() { }
